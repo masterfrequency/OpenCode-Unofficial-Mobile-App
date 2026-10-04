@@ -2,12 +2,18 @@
 .gradle/
 build/
 local.properties
-*.apk
-*.aab
 *.keystore
 *.jks
 keystore.properties
 release-key.jks
+
+# Build output is ignored by default. The signed release artifacts under
+# releases/<version>/ ARE tracked on purpose so they are downloadable straight
+# from the repository. Un-ignore those explicitly.
+*.apk
+*.aab
+!releases/**/*.apk
+!releases/**/*.aab
 
 # Gateway runtime state - never commit these
 .devices.json
@@ -26,5 +32,6 @@ Thumbs.db
 # OS
 node_modules/
 
-# Release binaries live in GitHub Releases, not the git tree
+# Staging scratch directory, not tracked. Signed artifacts are committed
+# under releases/<version>/ instead.
 dist/

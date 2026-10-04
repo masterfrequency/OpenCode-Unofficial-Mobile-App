@@ -82,15 +82,17 @@ You reach that machine over a private HTTPS address, most easily via [Tailscale]
 
 ## Download
 
-Releases are on the [GitHub Releases page](https://github.com/masterfrequency/OpenCode-Unofficial-Mobile-App/releases).
+Binaries are committed in this repository under [`releases/v1.0.0/`](releases/v1.0.0/) — clone the repo or download a single file from the browser, no archive extraction needed. The same files are attached to the [Releases page](https://github.com/masterfrequency/OpenCode-Unofficial-Mobile-App/releases/tag/v1.0.0).
+
+**Install the app — [`OpenCode-Unofficial-v1.0.apk`](releases/v1.0.0/OpenCode-Unofficial-v1.0.apk)**
 
 | Artifact | Platform | Notes |
 |---|---|---|
-| `OpenCode-Unofficial-v1.0.apk` | Android 8.0+ | Direct install. Enable "install from unknown sources" for your browser. |
-| `OpenCode-Unofficial-v1.0.aab` | Android | For Play Store or bundletool distribution. |
-| `OpenCode-Unofficial-Setup-v1.0.exe` | Windows x64 | Self-contained gateway installer. |
-| `opencode-unofficial-gateway_1.0.deb` | Debian / Ubuntu | Requires Node.js 20+. |
-| `OpenCode-Unofficial-v1_0_0-source.zip` | Any | Complete source, including the gateway. |
+| [`OpenCode-Unofficial-v1.0.apk`](releases/v1.0.0/OpenCode-Unofficial-v1.0.apk) | Android 8.0+ | Direct install. Enable "install from unknown sources" first. |
+| [`OpenCode-Unofficial-v1.0.aab`](releases/v1.0.0/OpenCode-Unofficial-v1.0.aab) | Android | For Play Store or bundletool distribution. |
+| [`OpenCode-Unofficial-Setup-v1.0.exe`](releases/v1.0.0/OpenCode-Unofficial-Setup-v1.0.exe) | Windows x64 | Self-contained gateway installer. |
+| [`opencode-unofficial-gateway_1.0.deb`](releases/v1.0.0/opencode-unofficial-gateway_1.0.deb) | Debian / Ubuntu | Requires Node.js 20+. |
+| `OpenCode-Unofficial-v1_0_0-source.zip` | Any | Same source as this repo, as a single archive. |
 
 **SHA-256**
 
@@ -205,6 +207,8 @@ gateway/     Node gateway (no npm dependencies)
   device-admin.mjs  — list / promote / revoke / reset CLI
   *.sh, *.ps1       — service install and startup scripts
 packaging/   Windows (.exe) and Debian (.deb) installer sources
+releases/    Signed release binaries, tracked in git
+v1.0.0/      APK, AAB, Windows installer, Debian package
 .github/workflows/release.yml
 ```
 
