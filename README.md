@@ -82,7 +82,7 @@ You reach that machine over a private HTTPS address, most easily via [Tailscale]
 
 ## Download
 
-Releases are on the [GitHub Releases page](https://github.com/masterfrequency/OpenCode-Unofficial/releases).
+Releases are on the [GitHub Releases page](https://github.com/masterfrequency/OpenCode-Unofficial-Mobile-App/releases).
 
 | Artifact | Platform | Notes |
 |---|---|---|
