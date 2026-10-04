@@ -1,0 +1,30 @@
+# Android / Gradle
+.gradle/
+build/
+local.properties
+*.apk
+*.aab
+*.keystore
+*.jks
+keystore.properties
+release-key.jks
+
+# Gateway runtime state - never commit these
+.devices.json
+.pairing-code
+*.token
+opencode-unofficial-token.txt
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+
+# OS
+node_modules/
+
+# Release binaries live in GitHub Releases, not the git tree
+dist/
