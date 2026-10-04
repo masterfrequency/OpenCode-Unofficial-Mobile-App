@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenCode Remote Gateway
+After=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+WorkingDirectory=/opt/opencode-mobile/gateway
+Environment=OPENCODE_REMOTE_TOKEN=REPLACE_WITH_64_CHAR_RANDOM_TOKEN
+ExecStart=/opt/opencode-mobile/gateway/start.sh
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

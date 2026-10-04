@@ -188,13 +188,35 @@ DEVICE_STORE_FILE=~/.opencode-gateway/.devices.json node device-admin.mjs reset 
 
 ---
 
+## Repository layout
+
+The full source is committed to this repository. Clone it and you have everything needed to build the app and run the gateway.
+
+```
+app/         Android client (Java + WebView assets)
+  src/main/java/dev/phonkalphabet/opencode/mobile/
+             MainActivity.java — WebView host, share intents, voice, file chooser
+             TokenVault.java    — Android Keystore credential storage
+  src/main/assets/
+             app.js, ui.js, app.css, index.html — the web interface
+             opencode-unofficial-gateway.zip  — gateway, shipped inside the app
+gateway/     Node gateway (no npm dependencies)
+  server.mjs        — HTTP server, pairing, per-device credentials
+  device-admin.mjs  — list / promote / revoke / reset CLI
+  *.sh, *.ps1       — service install and startup scripts
+packaging/   Windows (.exe) and Debian (.deb) installer sources
+.github/workflows/release.yml
+```
+
+---
+
 ## Building from source
 
 Requirements: JDK 17+, Android SDK, Node.js 20+.
 
 ```bash
-unzip OpenCode-Unofficial-v1_0_0-source.zip
-cd OpenCode-Mobile-AIO
+git clone https://github.com/masterfrequency/OpenCode-Unofficial-Mobile-App.git
+cd OpenCode-Unofficial-Mobile-App
 
 cp keystore.properties.example keystore.properties   # fill in your own signing key
 ./gradlew assembleRelease
@@ -205,6 +227,8 @@ The gateway is plain Node with no dependencies:
 ```bash
 cd gateway && node --check server.mjs
 ```
+
+Prebuilt binaries are on the [Releases page](https://github.com/masterfrequency/OpenCode-Unofficial-Mobile-App/releases).
 
 > **Known build issue:** `versionCode` is currently `1`. Android refuses to install an update whose code is not higher than the installed one, so an in-place upgrade from any earlier build will fail and require an uninstall. Bump `app/build.gradle` before shipping a follow-up release.
 

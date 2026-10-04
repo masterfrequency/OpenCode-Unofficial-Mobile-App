@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>OpenCode Unofficial</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body data-screen="connectionsScreen">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.2l1.1-4.7A8 8 0 1 1 21 12Z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2.5h7.5A2.5 2.5 0 0 1 21 10v7.5a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5Z"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2.5"/><rect x="3" y="13" width="18" height="7" rx="2.5"/><path d="M7 7.5h.01M7 16.5h.01"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-chev-l" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+  <symbol id="i-chev-r" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-chev-d" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1.1.9-1.1 1.6"/><path d="M12 17h.01"/></symbol>
+  <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v5.2c0 4.4 3 8.2 7 9.8 4-1.6 7-5.4 7-9.8V6Z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H16"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m5 8 5 4-5 4M13 17h6"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7.5A2.5 2.5 0 0 0 5 5.5v13A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5V8Z"/><path d="M14 3v5h5"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17Z"/><path d="m14.5 7.5 3 3"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></symbol>
+  <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l1.9 5.4L19.5 10l-5.6 1.7L12 17l-1.9-5.3L4.5 10l5.6-1.6Z"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3.5 2.8 19.5h18.4Z"/><path d="M12 10v4.5M12 17.4h.01"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2.5" fill="currentColor"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="m20 11.5-8.2 8.2a5 5 0 0 1-7-7l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.6 8.6a1.8 1.8 0 0 1-2.5-2.5L15 7.5"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l.8 12.5h9.4L17.5 7M10 11v5M14 11v5"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/></symbol>
+</defs></svg>
+
+<section class="intro" id="intro" hidden>
+  <video id="introVideo" src="intro.mp4" playsinline muted autoplay preload="auto"></video>
+  <button id="skipIntro" class="intro-skip">Skip</button>
+</section>
+
+<main id="app">
+  <video id="chatBackground" class="app-background" src="chat-background.mp4" poster="chat-background-poster.jpg" muted loop playsinline preload="metadata" aria-hidden="true"></video>
+  <div class="app-atmosphere" aria-hidden="true"></div>
+  <div class="aurora a" aria-hidden="true"></div>
+  <div class="aurora b" aria-hidden="true"></div>
+
+  <!-- Quick setup -->
+  <section class="screen" id="welcomeScreen">
+    <header class="bar"><span></span><div class="wordmark"><b>OpenCode <span>Unofficial</span></b><small>Quick setup</small></div><button id="skipWelcome" class="icon-btn" aria-label="Close help"><svg class="i"><use href="#i-x"/></svg></button></header>
+    <div class="welcome-hero hero">
+      <div class="orb"><i class="orb-glow"></i><i class="orb-ring"></i><i class="orb-ring r2"></i><img src="logo-sm.png" alt="OpenCode Unofficial logo"></div>
+      <div class="signature">by🇭🇷PhonkAlphabet</div>
+      <p class="eyebrow">Private remote access</p>
+      <h1>Connect in<br><span>three steps.</span></h1>
+      <p>Keep OpenCode and its credentials on your computer. This app connects through your private encrypted route.</p>
+    </div>
+    <div class="setup-progress"><span class="active"></span><span></span><span></span></div>
+    <div class="stagger">
+      <div class="setup-card"><div class="step-number">1</div><div><strong>Choose where OpenCode runs</strong><p>Use a VPS for always-on access, or your home PC for the easiest private setup.</p></div></div>
+      <div class="setup-card"><div class="step-number">2</div><div><strong>Start the included gateway</strong><p>Copy the <code>gateway</code> folder to that machine, create a token, then run <code>./start.sh</code>.</p></div></div>
+      <div class="setup-card accent"><div class="step-number">3</div><div><strong>Connect with Tailscale</strong><p>Install Tailscale on both devices, then expose the gateway with <code>tailscale serve --bg localhost:4174</code>.</p></div></div>
+    </div>
+    <button id="openSetupGuide" class="primary full-button">Open detailed setup guide</button>
+    <button id="startAdding" class="secondary full-button">I have my URL and pairing code</button>
+  </section>
+
+  <!-- Connections (home) -->
+  <section class="screen active" id="connectionsScreen">
+    <header class="bar"><button id="helpButton" class="icon-btn" aria-label="Setup help"><svg class="i"><use href="#i-help"/></svg></button><div class="wordmark"><b>OpenCode <span>Unofficial</span></b><small>Remote client</small></div><button id="addProfile" class="icon-btn accent" aria-label="Add connection"><svg class="i"><use href="#i-plus"/></svg></button></header>
+    <div class="hero">
+      <div class="orb"><i class="orb-glow"></i><i class="orb-ring"></i><i class="orb-ring r2"></i><img class="main-logo" src="logo-sm.png" alt="OpenCode Unofficial logo"></div>
+      <p class="eyebrow">Your servers · one client</p>
+      <h1>Code from<br><span>anywhere.</span></h1>
+      <p>Connect securely to OpenCode on your VPS or home computer.</p>
+    </div>
+    <div class="list" id="profileList" data-anim="1"></div>
+    <div class="security-note"><svg class="i"><use href="#i-shield"/></svg><p><strong>Private by design</strong><small>Your provider credentials stay on your server. This phone receives its own revocable device credential.</small></p></div>
+  </section>
+
+  <!-- Connection editor -->
+  <section class="screen" id="editorScreen">
+    <header class="bar"><button class="icon-btn" id="cancelProfile" aria-label="Back"><svg class="i"><use href="#i-chev-l"/></svg></button><div class="wordmark"><b id="profileFormTitle">Connection profile</b><small>HTTPS required</small></div><button id="profileHelp" type="button" class="icon-btn" aria-label="Setup help"><svg class="i"><use href="#i-help"/></svg></button></header>
+    <form id="profileForm" class="card form-card stagger">
+      <label>Name<input id="profileName" required placeholder="Home PC" autocomplete="off"></label>
+      <label>Gateway URL<input id="profileUrl" required type="url" inputmode="url" placeholder="https://device.tailnet.ts.net" autocomplete="off"></label>
+      <label>Project directory<input id="profileDirectory" placeholder="/home/me/projects/app" autocomplete="off"></label>
+      <button type="button" class="secondary" id="explainPairing">How to get a pairing code</button>
+      <div class="pair-help" id="pairHelp" hidden><strong>On the computer running OpenCode</strong><p>Start or restart the included gateway. The six-digit code is printed in its terminal and saved in the gateway folder as <code>.pairing-code</code>. It works once and expires after one hour.</p></div>
+      <label>One-time pairing code<input id="pairingCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="6 digits shown by gateway"></label>
+      <button type="button" class="primary" id="pairProfile">Pair and test connection</button>
+      <p class="form-help">Use the HTTPS address from Caddy, Tailscale Serve, or another trusted reverse proxy. Direct HTTP connections are intentionally blocked.</p>
+      <div id="diagnosticResult" class="diagnostic-result" hidden></div>
+      <button type="submit" class="primary" id="saveProfile">Save profile</button>
+      <button type="button" class="secondary" id="gatewayStatus" hidden>Gateway status</button>
+      <button type="button" class="secondary" id="manageDevices" hidden>Manage paired devices</button>
+      <button type="button" class="danger" id="deleteProfile" hidden>Delete profile</button>
+      <div id="testResult" class="test-result"></div>
+    </form>
+  </section>
+
+  <!-- Sessions -->
+  <section class="screen" id="sessionsScreen">
+    <header class="bar"><button class="icon-btn" id="backConnections" aria-label="Back to connections"><svg class="i"><use href="#i-chev-l"/></svg></button><button id="modelPicker" class="model-pill" aria-label="Choose model"><svg class="i"><use href="#i-sparkle"/></svg><div><span id="selectedModelName">Choose model</span><small>MODEL</small></div><svg class="i"><use href="#i-chev-d"/></svg></button><button id="createSession" class="icon-btn accent" aria-label="New session"><svg class="i"><use href="#i-plus"/></svg></button></header>
+    <div class="session-hero" id="sessionHero" data-state="connecting"><div class="mini-mark"><svg class="i"><use href="#i-code"/></svg></div><div><small><i class="dot"></i><span id="connectionState">CONNECTING</span> · ACTIVE PROJECT</small><strong id="activeDirectory">Default workspace</strong></div></div>
+    <div class="section-title"><strong>Sessions</strong><button id="refreshSessions">Refresh</button></div>
+    <label class="search-box session-search"><svg class="i"><use href="#i-search"/></svg><input id="sessionSearch" type="search" placeholder="Search sessions…" autocomplete="off" aria-label="Search sessions"></label>
+    <div id="sessionList" class="list session-list" data-anim="1"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>
+  </section>
+
+  <!-- Projects -->
+  <section class="screen" id="projectsScreen">
+    <header class="bar"><button class="icon-btn" id="backFromProjects" aria-label="Back"><svg class="i"><use href="#i-chev-l"/></svg></button><div class="wordmark"><b>Projects</b><small id="projectConnectionName">Remote workspaces</small></div><button id="refreshProjects" class="icon-btn" aria-label="Refresh projects"><svg class="i"><use href="#i-refresh"/></svg></button></header>
+    <div class="page-intro"><div class="tile"><svg class="i"><use href="#i-folder"/></svg></div><div><p class="eyebrow">OpenCode workspaces</p><h2>Your projects</h2><p>Select a known directory, then return to Chats to work in that project.</p></div></div>
+    <div id="projectList" class="list project-list" data-anim="1"><div class="skeleton"></div><div class="skeleton"></div></div>
+  </section>
+
+  <!-- Models -->
+  <section class="screen" id="modelsScreen">
+    <header class="bar"><button class="icon-btn" id="backFromModels" aria-label="Back"><svg class="i"><use href="#i-chev-l"/></svg></button><div class="wordmark"><b>Models &amp; providers</b><small>OpenCode catalog</small></div><button id="refreshModels" class="icon-btn" aria-label="Refresh models"><svg class="i"><use href="#i-refresh"/></svg></button></header>
+    <div class="model-tabs seg"><button class="active" data-model-filter="free">Free &amp; ready</button><button data-model-filter="connected">Connected</button><button data-model-filter="all">Catalog</button></div>
+    <p class="filter-note" id="modelFilterNote">Only zero-cost text models from providers already connected to this OpenCode server.</p>
+    <label class="search-box"><svg class="i"><use href="#i-search"/></svg><input id="modelSearch" placeholder="Search models…" autocomplete="off"></label>
+    <div id="modelList" class="list model-list" data-anim="1"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>
+    <div class="provider-actions"><button id="addOpenRouter" class="provider-action"><span class="tile pink">OR</span><div class="meta"><strong>Add OpenRouter</strong><small>API key + full model catalog</small></div><svg class="i chev"><use href="#i-chev-r"/></svg></button><button id="addCustomProvider" class="provider-action"><span class="tile pink"><svg class="i"><use href="#i-plus"/></svg></span><div class="meta"><strong>Custom endpoint</strong><small>Any OpenAI-compatible API</small></div><svg class="i chev"><use href="#i-chev-r"/></svg></button></div>
+  </section>
+
+  <!-- Chat -->
+  <section class="screen" id="chatScreen">
+    <header class="bar"><button class="icon-btn" id="backSessions" aria-label="Back to sessions"><svg class="i"><use href="#i-chev-l"/></svg></button><div class="wordmark"><b id="chatTitle">Session</b><small id="chatState">READY</small></div><button class="icon-btn" id="reloadMessages" aria-label="Reload messages"><svg class="i"><use href="#i-refresh"/></svg></button></header>
+    <div id="messages" class="messages" role="log" aria-live="off" aria-label="Conversation"></div>
+    <div class="dock" id="dock">
+      <div id="permissionArea"></div>
+      <div class="thinking" id="thinking" hidden aria-hidden="true"><span></span><span></span><span></span><small id="thinkingText">OpenCode is thinking…</small></div>
+      <div class="attach-tray" id="attachTray" hidden></div>
+      <form class="composer" id="promptForm"><button type="button" class="tool-btn" id="attachButton" aria-label="Attach file or image"><svg class="i"><use href="#i-clip"/></svg></button><textarea id="promptInput" rows="1" placeholder="Ask OpenCode anything…" enterkeyhint="send" aria-label="Message OpenCode"></textarea><button type="button" class="tool-btn" id="micButton" aria-label="Dictate message"><svg class="i"><use href="#i-mic"/></svg></button><button class="send" id="sendButton" aria-label="Send"><svg class="i"><use href="#i-arrow-up"/></svg></button><input type="file" id="fileInput" multiple accept="image/*,application/pdf,text/*,.md,.json,.js,.ts,.tsx,.jsx,.py,.java,.kt,.go,.rs,.c,.cpp,.cs,.rb,.php,.sh,.yml,.yaml,.toml,.xml,.html,.css,.sql,.log,.csv" hidden></form>
+    </div>
+    <button class="to-bottom" id="toBottom" type="button" aria-label="Jump to latest"><svg class="i"><use href="#i-arrow-up"/></svg></button>
+  </section>
+
+  <!-- Persistent tab bar (shared by Chats / Projects / Models) -->
+  <nav id="tabbar" aria-label="Primary">
+    <i class="tab-pill" aria-hidden="true"></i>
+    <button data-tab="chats" class="active"><svg class="i"><use href="#i-chat"/></svg><small>Chats</small></button>
+    <button data-tab="projects"><svg class="i"><use href="#i-folder"/></svg><small>Projects</small></button>
+    <button data-tab="models"><svg class="i"><use href="#i-sliders"/></svg><small>Models</small></button>
+    <button data-tab="servers"><svg class="i"><use href="#i-server"/></svg><small>Servers</small></button>
+  </nav>
+</main>
+
+<!-- Setup guide -->
+<section class="guide" id="setupGuide" hidden>
+  <div class="guide-sheet">
+    <div class="grabber"></div>
+    <div class="guide-head"><div><small>OPENCODE UNOFFICIAL</small><h2>Connection setup</h2></div><button id="closeSetupGuide" class="icon-btn" aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="gateway-download"><strong>First: install the gateway</strong><p>The gateway is a separate companion service. It does not replace or modify OpenCode. Transfer the installer to the same computer or VPS where OpenCode is installed.</p><button id="downloadWindowsInstaller" class="primary full-button">Save Windows installer (.exe)</button><button id="downloadDebianInstaller" class="primary full-button">Save Debian / Ubuntu package (.deb)</button><button id="downloadGateway" class="secondary full-button">Save portable gateway (.zip)</button><small id="gatewayDownloadState">The installers check OpenCode, Node.js, and Tailscale, then configure the gateway and pairing code.</small></div>
+    <div class="route-tabs seg"><button class="active" data-route="tailscale">Linux/VPS</button><button data-route="windows">Windows</button><button data-route="domain">Domain</button><button data-route="lan">Local</button></div>
+    <div class="route active" id="route-tailscale">
+      <span class="recommended">RECOMMENDED · VPS OR HOME PC</span>
+      <ol><li>Install OpenCode, Node.js 20+, and Tailscale on the Linux PC or VPS. Install Tailscale on this Android phone and sign both into the same tailnet.</li><li>Tap <strong>Save Debian / Ubuntu package</strong>, transfer the <code>.deb</code> to the Linux machine, then run:<pre>sudo apt install ./opencode-unofficial-gateway_1.0.0_all.deb
+opencode-unofficial-setup</pre></li><li>The setup checks the required programs, installs the gateway separately from OpenCode, enables automatic startup, configures Tailscale Serve, and prints the pairing code.</li><li>Create a profile, enter the displayed HTTPS URL and six-digit code, then tap <strong>Pair and test connection</strong>.</li></ol>
+      <div class="tip"><strong>VPS tip</strong><p>Tailscale avoids opening public firewall ports. OpenCode stays on <code>127.0.0.1:4096</code>.</p></div>
+      <div class="tip"><strong>Owner recovery</strong><p>Promote a second owner under <strong>Edit connection → Manage paired devices</strong>. If every owner is lost, run <code>node device-admin.mjs list</code> and <code>node device-admin.mjs promote DEVICE_ID</code> locally in the installed gateway folder.</p></div>
+    </div>
+    <div class="route" id="route-windows">
+      <span class="recommended">WINDOWS PC · POWERSHELL</span>
+      <ol>
+        <li>Install OpenCode, Node.js 20+, and Tailscale on the Windows PC. Install Tailscale on this Android phone too, then sign both devices into the same tailnet.</li>
+        <li>Tap <strong>Save Windows installer</strong>, transfer the <code>.exe</code> to the Windows PC, verify the publisher signature, and run it.</li>
+        <li>The installer checks OpenCode, Node.js, and Tailscale; installs the gateway separately under your local application data; configures startup and Tailscale Serve; and prints the HTTPS address and pairing code.</li>
+        <li>Enter the HTTPS URL and six-digit pairing code in a new connection profile, then tap <strong>Pair and test connection</strong>.</li>
+      </ol>
+      <div class="tip"><strong>Where is the pairing code?</strong><p>It is printed in the gateway window and saved in <code>gateway\.pairing-code</code>. It expires after one hour and works once. Restart the gateway for a new code.</p></div>
+      <div class="tip"><strong>Adding more phones</strong><p>Restart the gateway for a fresh code before pairing each phone. The first phone is the owner and can revoke later phones under <strong>Edit connection → Manage paired devices</strong>.</p></div>
+      <div class="tip"><strong>Portable fallback</strong><p>If your system cannot use the installer, save the portable ZIP and extract it into its own writable folder—never over OpenCode itself.</p></div>
+      <div class="tip"><strong>Owner recovery</strong><p>Promote a second owner under <strong>Edit connection → Manage paired devices</strong>. If every owner is lost, run <code>node device-admin.mjs list</code> and <code>node device-admin.mjs promote DEVICE_ID</code> locally in the gateway folder.</p></div>
+      <div class="warning"><strong>Windows Firewall</strong><p>Do not open ports 4096 or 4174 publicly. Tailscale reaches the loopback-only gateway without router port forwarding.</p></div>
+    </div>
+    <div class="route" id="route-domain">
+      <span class="recommended">PUBLIC VPS WITH HTTPS</span>
+      <ol><li>Start the gateway using the commands above.</li><li>Point your domain to the VPS.</li><li>Install Caddy and copy <code>gateway/Caddyfile.example</code>.</li><li>Replace <code>code.example.com</code> with your domain and reload Caddy.</li><li>Use <code>https://your-domain</code> in the app.</li></ol>
+      <div class="warning"><strong>Never expose port 4096</strong><p>Only the authenticated gateway on port 4174 should sit behind HTTPS.</p></div>
+    </div>
+    <div class="route" id="route-lan">
+      <span class="recommended">HOME NETWORK</span>
+      <p>Android blocks insecure HTTP by design. The simplest supported home setup is still Tailscale because it gives you a trusted HTTPS address without router configuration.</p>
+      <p>If you operate your own local certificate authority, put an HTTPS reverse proxy in front of port 4174 and install its CA on Android.</p>
+    </div>
+    <button id="guideAddProfile" class="primary full-button">Add connection profile</button>
+  </div>
+</section>
+
+<section class="guide" id="deviceSheet" hidden>
+  <div class="guide-sheet device-sheet">
+    <div class="grabber"></div>
+    <div class="guide-head"><div><small>ACCESS CONTROL</small><h2>Paired devices</h2></div><button type="button" id="closeDeviceSheet" class="icon-btn" aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <p class="form-help">Every phone has a separate encrypted credential. An owner can revoke a lost or retired device without disconnecting everyone else.</p>
+    <div id="deviceList" class="device-list"><div class="skeleton"></div></div>
+  </div>
+</section>
+
+<section class="guide" id="statusSheet" hidden>
+  <div class="guide-sheet device-sheet">
+    <div class="grabber"></div>
+    <div class="guide-head"><div><small>SERVER DIAGNOSTICS</small><h2>Gateway status</h2></div><button type="button" id="closeStatusSheet" class="icon-btn" aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div id="statusList" class="device-list"><div class="skeleton"></div></div>
+  </div>
+</section>
+
+<section class="guide" id="providerSheet" hidden>
+  <form class="guide-sheet provider-sheet" id="providerForm">
+    <div class="grabber"></div>
+    <div class="guide-head"><div><small>SECURE PROVIDER SETUP</small><h2 id="providerFormTitle">Add provider</h2></div><button type="button" id="closeProviderSheet" class="icon-btn" aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <input type="hidden" id="providerKind">
+    <label>Display name<input id="providerName" required placeholder="My provider" autocomplete="off"></label>
+    <label id="providerIdRow">Provider ID<input id="providerId" required placeholder="my-provider" autocomplete="off"></label>
+    <label id="providerUrlRow">OpenAI-compatible base URL<input id="providerUrl" type="url" placeholder="https://api.example.com/v1" autocomplete="off"></label>
+    <label>API key<input id="providerKey" required type="password" autocomplete="off" placeholder="sk-…"></label>
+    <p class="form-help" style="margin-top:14px">The key is sent through your encrypted connection and stored by OpenCode on the remote machine. It is not saved in this app.</p>
+    <button type="submit" class="primary full-button">Connect provider and load models</button>
+    <div id="providerResult" class="test-result"></div>
+  </form>
+</section>
+
+<audio id="soundSent" src="message-sent.ogg" preload="auto"></audio>
+<audio id="soundReceived" src="message-received.ogg" preload="auto"></audio>
+<audio id="soundButton" src="button-click.mp3" preload="auto"></audio>
+<div class="net-banner" id="netBanner" role="status" hidden>Offline · reconnecting… tap to retry</div>
+<div class="sr-only" id="announcer" role="status" aria-live="polite"></div>
+<section class="guide" id="sessionSheet" hidden>
+  <form class="guide-sheet" id="sessionForm">
+    <div class="grabber"></div>
+    <div class="guide-head"><div><small>SESSION</small><h2 id="sessionSheetTitle">Session</h2></div><button type="button" id="closeSessionSheet" class="icon-btn" aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <label>Name<input id="sessionRename" required maxlength="120" autocomplete="off"></label>
+    <button type="submit" class="primary full-button">Save name</button>
+    <button type="button" id="deleteSession" class="danger full-button">Delete session</button>
+  </form>
+</section>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="ui.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
