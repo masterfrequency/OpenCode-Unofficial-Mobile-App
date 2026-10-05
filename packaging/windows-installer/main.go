@@ -17,7 +17,7 @@ import (
 var payload embed.FS
 
 func main() {
-	fmt.Println("OpenCode Unofficial Gateway Setup 1.0.0")
+	fmt.Println("OpenCode Unofficial Gateway Setup 1.1.0")
 	missing := []string{}
 	for _, command := range []string{"opencode", "node", "tailscale", "powershell"} {
 		if _, err := exec.LookPath(command); err != nil { missing = append(missing, command) }

@@ -1,37 +1,19 @@
-# Android / Gradle
 .gradle/
-build/
+.idea/
 local.properties
-*.keystore
-*.jks
 keystore.properties
-release-key.jks
-
-# Build output is ignored by default. The signed release artifacts under
-# releases/<version>/ ARE tracked on purpose so they are downloadable straight
-# from the repository. Un-ignore those explicitly.
+*.jks
+*.keystore
+**/build/
+packaging/debian/build/
+packaging/windows-installer/payload/
+app/src/main/assets/opencode-unofficial-setup-unsigned.exe
+app/src/main/assets/opencode-unofficial-setup.exe
+app/src/main/assets/opencode-unofficial-gateway.deb
 *.apk
 *.aab
-!releases/**/*.apk
-!releases/**/*.aab
-
-# Gateway runtime state - never commit these
-.devices.json
-.pairing-code
-*.token
-opencode-unofficial-token.txt
-
-# OS / editor cruft
 .DS_Store
-Thumbs.db
-*.swp
-*~
-.idea/
-.vscode/
-
-# OS
-node_modules/
-
-# Staging scratch directory, not tracked. Signed artifacts are committed
-# under releases/<version>/ instead.
-dist/
+.pairing-code
+.gateway-token
+.devices.json
+.devices.json.*.tmp

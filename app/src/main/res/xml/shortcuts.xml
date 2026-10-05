@@ -1,0 +1,13 @@
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="new_chat"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_new"
+        android:shortcutShortLabel="@string/shortcut_new_chat_short"
+        android:shortcutLongLabel="@string/shortcut_new_chat_long">
+        <intent
+            android:action="dev.phonkalphabet.opencode.mobile.NEW_CHAT"
+            android:targetPackage="dev.phonkalphabet.opencode.mobile"
+            android:targetClass="dev.phonkalphabet.opencode.mobile.MainActivity" />
+    </shortcut>
+</shortcuts>

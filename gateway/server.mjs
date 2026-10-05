@@ -1,8 +1,8 @@
 import http from 'node:http'
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
-import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { resolve } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
 
 const listenHost = process.env.GATEWAY_HOST || '127.0.0.1'
@@ -40,6 +40,47 @@ function safeEqual(left, right) {
 
 function tokenHash(value) {
   return createHash('sha256').update(value).digest('hex')
+}
+
+const mobileAgentName = 'opencode-mobile-custom'
+const mobileAgentHeader = `---\ndescription: Custom primary system agent managed by OpenCode Unofficial\nmode: primary\n---\n\n<!-- managed-by: opencode-unofficial-mobile -->\n`
+
+async function customAgentTarget(directory = '') {
+  const pathInfo = await upstreamJson(`/path${directory ? `?directory=${encodeURIComponent(directory)}` : ''}`)
+  if (typeof pathInfo.config !== 'string' || !isAbsolute(pathInfo.config) || pathInfo.config.includes('\0')) throw new Error('OpenCode returned an invalid global configuration path')
+  mkdirSync(pathInfo.config, { recursive: true, mode: 0o700 })
+  const config = realpathSync(pathInfo.config)
+  const agents = join(config, 'agents')
+  mkdirSync(agents, { recursive: true, mode: 0o700 })
+  const root = realpathSync(agents)
+  const file = join(root, `${mobileAgentName}.md`)
+  if (existsSync(file) && lstatSync(file).isSymbolicLink()) throw new Error('Refusing to replace a symbolic-link custom agent')
+  return { config, root, file }
+}
+
+async function customAgentState(directory = '') {
+  const target = await customAgentTarget(directory)
+  if (!existsSync(target.file)) return { ...target, exists: false, prompt: '', hash: null, bytes: 0, updatedAt: null }
+  const info = statSync(target.file)
+  if (!info.isFile()) throw new Error('The mobile custom-agent path is not a regular file')
+  if (info.size > 4_100_000) throw new Error('The mobile custom agent is larger than the 4 MB editor limit')
+  const content = readFileSync(target.file, 'utf8')
+  if (!content.startsWith(mobileAgentHeader)) throw new Error('The mobile custom-agent file was changed outside the app and cannot be edited safely')
+  const prompt = content.slice(mobileAgentHeader.length)
+  return { ...target, exists: true, prompt, hash: createHash('sha256').update(content).digest('hex'), bytes: Buffer.byteLength(prompt), updatedAt: info.mtime.toISOString() }
+}
+
+function writeCustomAgent(state, prompt) {
+  const temporary = join(state.root, `.${mobileAgentName}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`)
+  const mode = state.exists ? statSync(state.file).mode & 0o777 : 0o600
+  try {
+    writeFileSync(temporary, mobileAgentHeader + prompt, { encoding: 'utf8', mode, flag: 'wx' })
+    renameSync(temporary, state.file)
+    chmodSync(state.file, mode)
+  } catch (error) {
+    try { if (existsSync(temporary)) unlinkSync(temporary) } catch (_) {}
+    throw error
+  }
 }
 
 function authenticate(request) {
@@ -122,7 +163,7 @@ function codeMatches(supplied) {
 const server = http.createServer(async (request, response) => {
   response.setHeader('Access-Control-Allow-Origin', '*')
   response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type')
-  response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS')
+  response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS')
   response.setHeader('X-Content-Type-Options', 'nosniff')
   response.setHeader('Referrer-Policy', 'no-referrer')
   response.setHeader('X-Frame-Options', 'DENY')
@@ -204,12 +245,39 @@ const server = http.createServer(async (request, response) => {
     return response.writeHead(204).end()
   }
 
+  const gatewayUrl = new URL(request.url, 'http://gateway.local')
+  if (request.method === 'GET' && gatewayUrl.pathname === '/gateway/custom-agent') {
+    try {
+      const state = await customAgentState(gatewayUrl.searchParams.get('directory') || '')
+      return response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ agentName: mobileAgentName, configDirectory: state.config, path: state.file, exists: state.exists, prompt: state.prompt, hash: state.hash, bytes: state.bytes, updatedAt: state.updatedAt }))
+    } catch (error) {
+      return response.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: error.message }))
+    }
+  }
+
+  if (request.method === 'PUT' && gatewayUrl.pathname === '/gateway/custom-agent') {
+    if (principal.role !== 'owner') return response.writeHead(403, { 'Content-Type': 'application/json' }).end('{"error":"only an owner device can change the global custom agent"}')
+    try {
+      const payload = await readJson(request, 4_200_000)
+      if (typeof payload.prompt !== 'string' || !payload.prompt.trim()) throw new Error('Custom system prompt cannot be empty')
+      if (Buffer.byteLength(payload.prompt, 'utf8') > 4_000_000) throw new Error('Custom system prompt exceeds the 4 MB limit')
+      const state = await customAgentState(payload.directory || '')
+      const expected = payload.expectedHash === null ? null : String(payload.expectedHash || '')
+      if (state.hash !== expected) return response.writeHead(409, { 'Content-Type': 'application/json' }).end('{"error":"The custom agent changed since it was loaded. Load the current prompt and review it before switching."}')
+      writeCustomAgent(state, payload.prompt)
+      const next = await customAgentState(payload.directory || '')
+      return response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ agentName: mobileAgentName, configDirectory: next.config, path: next.file, exists: true, hash: next.hash, bytes: next.bytes, updatedAt: next.updatedAt }))
+    } catch (error) {
+      return response.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: error.message }))
+    }
+  }
+
   if (request.url === '/health') {
     const check = http.get(new URL('/session', upstream), (upstreamResponse) => {
       upstreamResponse.resume()
-      response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ gateway: true, authenticated: true, opencode: upstreamResponse.statusCode < 500, upstreamStatus: upstreamResponse.statusCode, gatewayVersion: '1.0.0', opencodeVersion, tailscaleVersion, startedAt, pairedDeviceCount: deviceStore.devices.length, authentication: principal.type, role: principal.role, deviceID: principal.device?.id || null }))
+      response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ gateway: true, authenticated: true, opencode: upstreamResponse.statusCode < 500, upstreamStatus: upstreamResponse.statusCode, gatewayVersion: '1.1.0', opencodeVersion, tailscaleVersion, startedAt, pairedDeviceCount: deviceStore.devices.length, authentication: principal.type, role: principal.role, deviceID: principal.device?.id || null }))
     })
-    check.on('error', () => response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ gateway: true, authenticated: true, opencode: false, gatewayVersion: '1.0.0', opencodeVersion, tailscaleVersion, startedAt, pairedDeviceCount: deviceStore.devices.length, authentication: principal.type, role: principal.role, deviceID: principal.device?.id || null })))
+    check.on('error', () => response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ gateway: true, authenticated: true, opencode: false, gatewayVersion: '1.1.0', opencodeVersion, tailscaleVersion, startedAt, pairedDeviceCount: deviceStore.devices.length, authentication: principal.type, role: principal.role, deviceID: principal.device?.id || null })))
     return
   }
 
@@ -267,17 +335,17 @@ try {
 }
 
 server.listen(listenPort, listenHost, () => {
-  console.log(`OpenCode Remote Gateway 1.0.0 listening on http://${listenHost}:${listenPort}`)
+  console.log(`OpenCode Remote Gateway 1.1.0 listening on http://${listenHost}:${listenPort}`)
   console.log(`One-time pairing code (valid ${pairingTtlMinutes} minutes): ${pairingCode}`)
 })
 
-function readJson(request) {
+function readJson(request, limit = 1_000_000) {
   return new Promise((resolve, reject) => {
     const chunks = []
     let size = 0
     request.on('data', (chunk) => {
       size += chunk.length
-      if (size > 1_000_000) return reject(new Error('Request body is too large'))
+      if (size > limit) return reject(new Error('Request body is too large'))
       chunks.push(chunk)
     })
     request.on('end', () => {

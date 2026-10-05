@@ -38,7 +38,12 @@
   <symbol id="i-clip" viewBox="0 0 24 24"><path d="m20 11.5-8.2 8.2a5 5 0 0 1-7-7l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.6 8.6a1.8 1.8 0 0 1-2.5-2.5L15 7.5"/></symbol>
   <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></symbol>
   <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l.8 12.5h9.4L17.5 7M10 11v5M14 11v5"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 4h6l-.9 5.2L17 12H7l2.9-2.8Z"/><path d="M12 12v8"/></symbol>
+  <symbol id="i-wrap" viewBox="0 0 24 24"><path d="M4 6h16M4 12h13.5a3 3 0 0 1 0 6H12"/><path d="m14.5 15.5-2.5 2.5 2.5 2.5"/></symbol>
+  <symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="M12 5v14M5 12l7 7 7-7"/></symbol>
   <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></symbol>
+  <symbol id="i-volume" viewBox="0 0 24 24"><path d="M5 10v4h4l5 4V6l-5 4Z"/><path d="M17 9a4 4 0 0 1 0 6M19 6.5a7.5 7.5 0 0 1 0 11"/></symbol>
 </defs></svg>
 
 <section class="intro" id="intro" hidden>
@@ -74,7 +79,7 @@
 
   <!-- Connections (home) -->
   <section class="screen active" id="connectionsScreen">
-    <header class="bar"><button id="helpButton" class="icon-btn" aria-label="Setup help"><svg class="i"><use href="#i-help"/></svg></button><div class="wordmark"><b>OpenCode <span>Unofficial</span></b><small>Remote client</small></div><button id="addProfile" class="icon-btn accent" aria-label="Add connection"><svg class="i"><use href="#i-plus"/></svg></button></header>
+    <header class="bar home-bar"><button id="helpButton" class="icon-btn" aria-label="Setup help"><svg class="i"><use href="#i-help"/></svg></button><div class="wordmark"><b>OpenCode <span>Unofficial</span></b><small>Remote client</small></div><div class="bar-actions"><button id="openSettings" class="icon-btn" aria-label="App settings"><svg class="i"><use href="#i-sliders"/></svg></button><button id="addProfile" class="icon-btn accent" aria-label="Add connection"><svg class="i"><use href="#i-plus"/></svg></button></div></header>
     <div class="hero">
       <div class="orb"><i class="orb-glow"></i><i class="orb-ring"></i><i class="orb-ring r2"></i><img class="main-logo" src="logo-sm.png" alt="OpenCode Unofficial logo"></div>
       <p class="eyebrow">Your servers · one client</p>
@@ -83,6 +88,26 @@
     </div>
     <div class="list" id="profileList" data-anim="1"></div>
     <div class="security-note"><svg class="i"><use href="#i-shield"/></svg><p><strong>Private by design</strong><small>Your provider credentials stay on your server. This phone receives its own revocable device credential.</small></p></div>
+  </section>
+
+  <!-- Settings -->
+  <section class="screen" id="settingsScreen">
+    <header class="bar"><button id="backFromSettings" class="icon-btn" aria-label="Back"><svg class="i"><use href="#i-chev-l"/></svg></button><div class="wordmark"><b>App settings</b><small>On this phone</small></div><span></span></header>
+    <div class="page-intro"><div class="tile pink"><svg class="i"><use href="#i-sliders"/></svg></div><div><p class="eyebrow">Personalize</p><h2>Make it yours</h2><p>Changes are saved locally and apply immediately.</p></div></div>
+    <div class="settings-stack stagger">
+      <div class="card settings-card">
+        <div class="settings-title"><svg class="i"><use href="#i-volume"/></svg><div><strong>Sound volume</strong><small>Message and interface sounds</small></div><output id="soundVolumeValue">10%</output></div>
+        <input class="range-control" id="soundVolume" type="range" min="0" max="100" step="5" value="10" aria-label="Sound volume">
+      </div>
+      <div class="card settings-card">
+        <label class="switch-row"><span><strong>Haptics</strong><small>Tap feedback when actions complete or need attention.</small></span><input type="checkbox" id="hapticToggle" role="switch"></label>
+        <label class="switch-row"><span><strong>Task notifications</strong><small>Notify when OpenCode finishes or requests permission in the background.</small></span><input type="checkbox" id="notifyToggle" role="switch"></label>
+      </div>
+      <div class="card settings-card">
+        <label class="select-row"><span><strong>Auto-scroll</strong><small>Choose how chat follows streaming replies.</small></span><select id="autoScroll"><option value="smart">Smart · only at latest</option><option value="always">Always follow replies</option><option value="off">Never move automatically</option></select></label>
+        <label class="select-row"><span><strong>Text size</strong><small>Increase text throughout the app for readability.</small></span><select id="fontSize"><option value="100">Standard</option><option value="115">Comfortable</option><option value="130">Large</option></select></label>
+      </div>
+    </div>
   </section>
 
   <!-- Connection editor -->
@@ -134,15 +159,27 @@
 
   <!-- Chat -->
   <section class="screen" id="chatScreen">
-    <header class="bar"><button class="icon-btn" id="backSessions" aria-label="Back to sessions"><svg class="i"><use href="#i-chev-l"/></svg></button><div class="wordmark"><b id="chatTitle">Session</b><small id="chatState">READY</small></div><button class="icon-btn" id="reloadMessages" aria-label="Reload messages"><svg class="i"><use href="#i-refresh"/></svg></button></header>
+    <header class="bar"><button class="icon-btn" id="backSessions" aria-label="Back to sessions"><svg class="i"><use href="#i-chev-l"/></svg></button><div class="wordmark"><b id="chatTitle">Session</b><small><span id="chatState">READY</span><button type="button" class="usage-pill" id="chatUsage" hidden aria-label="Token usage and cost"></button></small></div><button class="icon-btn" id="exportConversation" aria-label="Export conversation"><svg class="i"><use href="#i-download"/></svg></button><button class="icon-btn" id="searchToggle" aria-label="Search in conversation"><svg class="i"><use href="#i-search"/></svg></button><button class="icon-btn" id="reloadMessages" aria-label="Reload messages"><svg class="i"><use href="#i-refresh"/></svg></button></header>
+    <div class="chat-search" id="chatSearch" hidden>
+      <label class="search-box"><svg class="i"><use href="#i-search"/></svg><input id="chatSearchInput" type="search" placeholder="Find in conversation…" autocomplete="off" enterkeyhint="search" aria-label="Find in conversation"></label>
+      <span class="chat-search-count" id="chatSearchCount" aria-live="polite"></span>
+      <button type="button" class="icon-btn" id="chatSearchPrev" aria-label="Previous match"><svg class="i" style="transform:rotate(180deg)"><use href="#i-chev-d"/></svg></button>
+      <button type="button" class="icon-btn" id="chatSearchNext" aria-label="Next match"><svg class="i"><use href="#i-chev-d"/></svg></button>
+      <button type="button" class="icon-btn" id="chatSearchClose" aria-label="Close search"><svg class="i"><use href="#i-x"/></svg></button>
+    </div>
     <div id="messages" class="messages" role="log" aria-live="off" aria-label="Conversation"></div>
     <div class="dock" id="dock">
+      <div class="todo" id="todoPanel" hidden>
+        <button type="button" class="todo-head" id="todoToggle" aria-expanded="false" aria-controls="todoList"><svg class="i"><use href="#i-list"/></svg><span class="todo-title" id="todoTitle">Plan</span><span class="todo-count" id="todoCount">0/0</span><span class="todo-bar" aria-hidden="true"><i id="todoFill"></i></span><svg class="i todo-chev"><use href="#i-chev-d"/></svg></button>
+        <ol class="todo-list" id="todoList" hidden aria-label="Task plan"></ol>
+      </div>
       <div id="permissionArea"></div>
       <div class="thinking" id="thinking" hidden aria-hidden="true"><span></span><span></span><span></span><small id="thinkingText">OpenCode is thinking…</small></div>
+      <div class="queue-tray" id="queueTray" hidden></div>
       <div class="attach-tray" id="attachTray" hidden></div>
       <form class="composer" id="promptForm"><button type="button" class="tool-btn" id="attachButton" aria-label="Attach file or image"><svg class="i"><use href="#i-clip"/></svg></button><textarea id="promptInput" rows="1" placeholder="Ask OpenCode anything…" enterkeyhint="send" aria-label="Message OpenCode"></textarea><button type="button" class="tool-btn" id="micButton" aria-label="Dictate message"><svg class="i"><use href="#i-mic"/></svg></button><button class="send" id="sendButton" aria-label="Send"><svg class="i"><use href="#i-arrow-up"/></svg></button><input type="file" id="fileInput" multiple accept="image/*,application/pdf,text/*,.md,.json,.js,.ts,.tsx,.jsx,.py,.java,.kt,.go,.rs,.c,.cpp,.cs,.rb,.php,.sh,.yml,.yaml,.toml,.xml,.html,.css,.sql,.log,.csv" hidden></form>
     </div>
-    <button class="to-bottom" id="toBottom" type="button" aria-label="Jump to latest"><svg class="i"><use href="#i-arrow-up"/></svg></button>
+    <button class="to-bottom" id="toBottom" type="button" aria-label="Jump to latest"><span class="to-bottom-label">New content</span><svg class="i"><use href="#i-arrow-down"/></svg></button>
   </section>
 
   <!-- Persistent tab bar (shared by Chats / Projects / Models) -->
@@ -164,7 +201,7 @@
     <div class="route-tabs seg"><button class="active" data-route="tailscale">Linux/VPS</button><button data-route="windows">Windows</button><button data-route="domain">Domain</button><button data-route="lan">Local</button></div>
     <div class="route active" id="route-tailscale">
       <span class="recommended">RECOMMENDED · VPS OR HOME PC</span>
-      <ol><li>Install OpenCode, Node.js 20+, and Tailscale on the Linux PC or VPS. Install Tailscale on this Android phone and sign both into the same tailnet.</li><li>Tap <strong>Save Debian / Ubuntu package</strong>, transfer the <code>.deb</code> to the Linux machine, then run:<pre>sudo apt install ./opencode-unofficial-gateway_1.0.0_all.deb
+      <ol><li>Install OpenCode, Node.js 20+, and Tailscale on the Linux PC or VPS. Install Tailscale on this Android phone and sign both into the same tailnet.</li><li>Tap <strong>Save Debian / Ubuntu package</strong>, transfer the <code>.deb</code> to the Linux machine, then run:<pre>sudo apt install ./opencode-unofficial-gateway_1.1.0_all.deb
 opencode-unofficial-setup</pre></li><li>The setup checks the required programs, installs the gateway separately from OpenCode, enables automatic startup, configures Tailscale Serve, and prints the pairing code.</li><li>Create a profile, enter the displayed HTTPS URL and six-digit code, then tap <strong>Pair and test connection</strong>.</li></ol>
       <div class="tip"><strong>VPS tip</strong><p>Tailscale avoids opening public firewall ports. OpenCode stays on <code>127.0.0.1:4096</code>.</p></div>
       <div class="tip"><strong>Owner recovery</strong><p>Promote a second owner under <strong>Edit connection → Manage paired devices</strong>. If every owner is lost, run <code>node device-admin.mjs list</code> and <code>node device-admin.mjs promote DEVICE_ID</code> locally in the installed gateway folder.</p></div>
@@ -240,8 +277,18 @@ opencode-unofficial-setup</pre></li><li>The setup checks the required programs, 
     <div class="guide-head"><div><small>SESSION</small><h2 id="sessionSheetTitle">Session</h2></div><button type="button" id="closeSessionSheet" class="icon-btn" aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <label>Name<input id="sessionRename" required maxlength="120" autocomplete="off"></label>
     <button type="submit" class="primary full-button">Save name</button>
+    <button type="button" id="pinSession" class="secondary full-button">Pin to top</button>
     <button type="button" id="deleteSession" class="danger full-button">Delete session</button>
   </form>
+</section>
+<section class="guide" id="exportSheet" hidden>
+  <div class="guide-sheet compact-sheet">
+    <div class="grabber"></div>
+    <div class="guide-head"><div><small>MARKDOWN</small><h2>Export conversation</h2></div><button type="button" id="closeExportSheet" class="icon-btn" aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <p class="form-help export-help">Save a portable <code>.md</code> file or share the Markdown text with another app.</p>
+    <button type="button" id="saveConversation" class="primary full-button">Save Markdown file</button>
+    <button type="button" id="shareConversation" class="secondary full-button">Share conversation</button>
+  </div>
 </section>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script src="ui.js"></script>

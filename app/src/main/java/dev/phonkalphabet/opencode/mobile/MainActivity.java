@@ -1,6 +1,8 @@
 package dev.phonkalphabet.opencode.mobile;
 
+import android.Manifest;
 import android.app.Activity;
+import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.provider.OpenableColumns;
 import android.speech.RecognizerIntent;
@@ -26,6 +28,7 @@ import android.webkit.WebViewClient;
 import org.json.JSONObject;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 
 public final class MainActivity extends Activity {
     private static final int EXPORT_GATEWAY_REQUEST = 4107;
@@ -41,9 +44,16 @@ public final class MainActivity extends Activity {
     private int bottomInsetCss;
     private FrameLayout container;
     private String pendingExportAsset;
+    private String pendingExportText;
+    private String pendingLaunchJs;
+    private static volatile boolean visible;
+    private static volatile MainActivity current;
+    private static final int NOTIFICATION_REQUEST = 4110;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        current = this;
+        Notifier.ensureChannels(this);
         tokenVault = new TokenVault(this);
         webView = new WebView(this);
         webView.setBackgroundColor(0xFF05060B);
@@ -114,18 +124,71 @@ public final class MainActivity extends Activity {
         webView.loadUrl("file:///android_asset/index.html");
         setContentView(container);
         handleShareIntent(getIntent());
+        if (state == null) handleLaunchIntent(getIntent());
+    }
+
+    static boolean isVisible() { return visible; }
+
+    /** Called from TaskService when a watched session changes while the app is on screen. */
+    static void dispatchTaskEvent(String kind, String session, String title) {
+        MainActivity activity = current;
+        if (activity == null) return;
+        activity.runOnUiThread(() -> {
+            if (activity.webView == null) return;
+            activity.webView.evaluateJavascript("window.nativeTaskEvent&&window.nativeTaskEvent(" + JSONObject.quote(kind) + "," + JSONObject.quote(session) + "," + JSONObject.quote(title == null ? "" : title) + ")", null);
+        });
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        visible = true;
+    }
+
+    @Override protected void onPause() {
+        visible = false;
+        super.onPause();
+    }
+
+    @Override protected void onDestroy() {
+        if (current == this) current = null;
+        super.onDestroy();
+    }
+
+    private void handleLaunchIntent(Intent intent) {
+        if (intent == null) return;
+        String action = intent.getAction();
+        if (Notifier.ACTION_NEW_CHAT.equals(action)) {
+            pendingLaunchJs = "window.nativeNewChat&&window.nativeNewChat()";
+        } else if (Notifier.ACTION_OPEN_SESSION.equals(action)) {
+            String profile = intent.getStringExtra(Notifier.EXTRA_PROFILE);
+            String session = intent.getStringExtra(Notifier.EXTRA_SESSION);
+            String title = intent.getStringExtra(Notifier.EXTRA_TITLE);
+            if (profile == null || session == null) return;
+            Notifier.clear(this, session);
+            pendingLaunchJs = "window.nativeOpenSession&&window.nativeOpenSession(" + JSONObject.quote(profile) + "," + JSONObject.quote(session) + "," + JSONObject.quote(title == null ? "" : title) + ")";
+        } else return;
+        intent.setAction(null);
+        deliverShare();
     }
 
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
         handleShareIntent(intent);
+        handleLaunchIntent(intent);
     }
 
     private void deliverShare() {
-        if (webView == null || !pageLoaded || pendingShareJs == null) return;
-        webView.evaluateJavascript(pendingShareJs, null);
-        pendingShareJs = null;
+        if (webView == null || !pageLoaded) return;
+        if (pendingShareJs != null) { webView.evaluateJavascript(pendingShareJs, null); pendingShareJs = null; }
+        if (pendingLaunchJs != null) { webView.evaluateJavascript(pendingLaunchJs, null); pendingLaunchJs = null; }
+    }
+
+    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != NOTIFICATION_REQUEST || webView == null) return;
+        boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+        webView.evaluateJavascript("window.notifyPermissionResult&&window.notifyPermissionResult(" + granted + ")", null);
     }
 
     @SuppressWarnings("deprecation")
@@ -225,24 +288,40 @@ public final class MainActivity extends Activity {
         }
         if (requestCode != EXPORT_GATEWAY_REQUEST) return;
         if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            boolean conversation = pendingExportText != null;
             pendingExportAsset = null;
-            notifyGatewayExport(false, "Save cancelled");
+            pendingExportText = null;
+            notifyExport(conversation, false, "Save cancelled");
             return;
         }
         Uri destination = data.getData();
-        try (InputStream input = getAssets().open(pendingExportAsset == null ? "opencode-unofficial-gateway.zip" : pendingExportAsset);
-             OutputStream output = getContentResolver().openOutputStream(destination, "w")) {
+        boolean conversation = pendingExportText != null;
+        try (OutputStream output = getContentResolver().openOutputStream(destination, "w")) {
             if (output == null) throw new IllegalStateException("Android could not open the selected destination");
-            byte[] buffer = new byte[8192];
-            int read;
-            while ((read = input.read(buffer)) != -1) output.write(buffer, 0, read);
+            if (conversation) {
+                output.write(pendingExportText.getBytes(StandardCharsets.UTF_8));
+            } else {
+                try (InputStream input = getAssets().open(pendingExportAsset == null ? "opencode-unofficial-gateway.zip" : pendingExportAsset)) {
+                    byte[] buffer = new byte[8192];
+                    int read;
+                    while ((read = input.read(buffer)) != -1) output.write(buffer, 0, read);
+                }
+            }
             output.flush();
             pendingExportAsset = null;
-            notifyGatewayExport(true, "File saved");
+            pendingExportText = null;
+            notifyExport(conversation, true, conversation ? "Conversation saved" : "File saved");
         } catch (Exception error) {
             pendingExportAsset = null;
-            notifyGatewayExport(false, error.getMessage() == null ? "Could not save gateway package" : error.getMessage());
+            pendingExportText = null;
+            notifyExport(conversation, false, error.getMessage() == null ? "Could not save file" : error.getMessage());
         }
+    }
+
+    private void notifyExport(boolean conversation, boolean ok, String message) {
+        if (conversation) {
+            webView.evaluateJavascript("window.conversationExportFinished&&window.conversationExportFinished(" + ok + "," + JSONObject.quote(message) + ")", null);
+        } else notifyGatewayExport(ok, message);
     }
 
     private void notifyGatewayExport(boolean ok, String message) {
@@ -251,14 +330,49 @@ public final class MainActivity extends Activity {
     }
 
     public final class FileBridge {
+        @JavascriptInterface public void exportText(String filename, String content) {
+            runOnUiThread(() -> {
+                try {
+                    pendingExportAsset = null;
+                    pendingExportText = content == null ? "" : content;
+                    Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("text/markdown");
+                    intent.putExtra(Intent.EXTRA_TITLE, filename == null || filename.trim().isEmpty() ? "OpenCode-conversation.md" : filename);
+                    startActivityForResult(intent, EXPORT_GATEWAY_REQUEST);
+                } catch (Exception error) {
+                    pendingExportText = null;
+                    webView.evaluateJavascript("window.conversationExportFinished&&window.conversationExportFinished(false,'Android could not open the file picker')", null);
+                }
+            });
+        }
+
+        @JavascriptInterface public void shareText(String filename, String content) {
+            runOnUiThread(() -> {
+                try {
+                    if (content != null && content.length() > 300000) {
+                        webView.evaluateJavascript("window.conversationExportFinished&&window.conversationExportFinished(false,'This conversation is too large to share directly. Save the Markdown file instead.')", null);
+                        return;
+                    }
+                    Intent intent = new Intent(Intent.ACTION_SEND);
+                    intent.setType("text/markdown");
+                    intent.putExtra(Intent.EXTRA_SUBJECT, filename == null ? "OpenCode conversation" : filename);
+                    intent.putExtra(Intent.EXTRA_TEXT, content == null ? "" : content);
+                    startActivity(Intent.createChooser(intent, "Share conversation"));
+                } catch (Exception error) {
+                    webView.evaluateJavascript("window.conversationExportFinished&&window.conversationExportFinished(false,'Sharing is not available on this device')", null);
+                }
+            });
+        }
+
         @JavascriptInterface public void exportGatewayPackage() {
-            export("opencode-unofficial-gateway.zip", "OpenCode-Unofficial-Gateway-1.0.0.zip", "application/zip");
+            export("opencode-unofficial-gateway.zip", "OpenCode-Unofficial-Gateway-1.1.0.zip", "application/zip");
         }
         @JavascriptInterface public void exportWindowsInstaller() {
-            export("opencode-unofficial-setup.exe", "OpenCode-Unofficial-Setup-1.0.0.exe", "application/vnd.microsoft.portable-executable");
+            export("opencode-unofficial-setup.exe", "OpenCode-Unofficial-Setup-1.1.0.exe", "application/vnd.microsoft.portable-executable");
         }
         @JavascriptInterface public void exportDebianInstaller() {
-            export("opencode-unofficial-gateway.deb", "opencode-unofficial-gateway_1.0.0_all.deb", "application/vnd.debian.binary-package");
+            export("opencode-unofficial-gateway.deb", "opencode-unofficial-gateway_1.1.0_all.deb", "application/vnd.debian.binary-package");
         }
         private void export(String asset, String filename, String mime) {
             runOnUiThread(() -> {
@@ -279,6 +393,61 @@ public final class MainActivity extends Activity {
     public final class DeviceBridge {
         @JavascriptInterface public void tap() {
             runOnUiThread(() -> { if (webView != null) webView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); });
+        }
+
+        @JavascriptInterface public void setTextZoom(int percent) {
+            final int safe = Math.max(85, Math.min(140, percent));
+            runOnUiThread(() -> { if (webView != null) webView.getSettings().setTextZoom(safe); });
+        }
+
+        /** kind: done | attention | error. Honors the user's system touch-feedback setting. */
+        @JavascriptInterface public void haptic(String kind) {
+            runOnUiThread(() -> {
+                if (webView == null) return;
+                int effect;
+                if ("attention".equals(kind)) effect = HapticFeedbackConstants.LONG_PRESS;
+                else if ("error".equals(kind)) effect = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ? HapticFeedbackConstants.REJECT : HapticFeedbackConstants.LONG_PRESS;
+                else effect = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ? HapticFeedbackConstants.CONFIRM : HapticFeedbackConstants.CONTEXT_CLICK;
+                webView.performHapticFeedback(effect);
+            });
+        }
+
+        @JavascriptInterface public boolean notificationsAllowed() {
+            return Notifier.allowed(MainActivity.this);
+        }
+
+        @JavascriptInterface public void requestNotifications() {
+            runOnUiThread(() -> {
+                if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS }, NOTIFICATION_REQUEST);
+                } else {
+                    boolean granted = Notifier.allowed(MainActivity.this);
+                    webView.evaluateJavascript("window.notifyPermissionResult&&window.notifyPermissionResult(" + granted + ")", null);
+                }
+            });
+        }
+
+        /** Start watching a session so the foreground service can alert when it finishes or needs approval. */
+        @JavascriptInterface public void watch(String profile, String session, String title, String baseUrl, String directory) {
+            TaskService.watch(MainActivity.this, profile, session, title, baseUrl, directory);
+        }
+
+        @JavascriptInterface public void unwatch(String session) {
+            if (session != null) TaskService.unwatch(session);
+        }
+
+        @JavascriptInterface public void clearNotifications(String session) {
+            Notifier.clear(MainActivity.this, session);
+        }
+
+        /** Remember the latest session for the launcher shortcut and widget. State: idle | working | done. */
+        @JavascriptInterface public void recordSession(String profile, String session, String title, String state) {
+            if (profile == null || session == null) return;
+            LastSession.save(MainActivity.this, profile, session, title, state);
+        }
+
+        @JavascriptInterface public void forgetSession() {
+            LastSession.clear(MainActivity.this);
         }
 
         @JavascriptInterface public void voice() {

@@ -4,7 +4,9 @@ const LEGACY_KEY = 'opencode.remote.profiles.v1'
 const WELCOME_KEY = 'opencode.remote.welcome.v1'
 const TOKEN_LENGTH = 32
 const vault = window.AndroidVault || null
-const SOUND_GAIN = 0.1
+const SOUND_VOLUME_KEY = 'opencode.remote.soundVolume.v1'
+const AUTO_SCROLL_KEY = 'opencode.remote.autoScroll.v1'
+const FONT_SIZE_KEY = 'opencode.remote.fontSize.v1'
 const DRAFT_KEY = 'opencode.remote.drafts.v1'
 const MAX_FILE_BYTES = 8 * 1024 * 1024
 
@@ -23,6 +25,7 @@ let lastAssistantText = ''
 let responseBaselineText = ''
 let waitingForAssistant = false
 let focusedPromptText = ''
+let pinUntil = 0
 let pendingToken = ''
 let originalProfileUrl = ''
 let typewriter = { key: '', target: '', count: 0, timer: null, lastGrowth: 0 }
@@ -46,12 +49,58 @@ let outbox = []
 let offline = false
 let draftTimer = null
 let lastSessionsLoad = 0
+let follow = true
+let pendingNew = false
+let lastScrollH = 0
+let lastMessages = []
+let queues = new Map()
+let pausedSessions = new Set()
+let flushing = false
+const FOLLOW_SLACK = 56
+const PIN_KEY = 'opencode.remote.pins.v1'
 const TAB_INDEX = { '#sessionsScreen': 0, '#projectsScreen': 1, '#modelsScreen': 2 }
+const NOTIFY_KEY = 'opencode.remote.notify.v1'
+const HAPTIC_KEY = 'opencode.remote.haptics.v1'
+const NOTIFY_ASKED_KEY = 'opencode.remote.notify.asked.v1'
+const LAST_PROFILE_KEY = 'opencode.remote.lastProfile.v1'
+const TODO_OPEN_KEY = 'opencode.remote.todoOpen.v1'
+const nativeDevice = window.AndroidDevice || null
+let todoSig = ''
+let recordedSig = ''
+let tokenWarningAt = 0
+/* ── Phone integration (haptics, notifications, launcher) ───────────────── */
+function prefOn(key) { return localStorage.getItem(key) !== 'off' }
+function prefValue(key, fallback) { try { return localStorage.getItem(key) || fallback } catch (_) { return fallback } }
+function soundVolume() { return Math.max(0, Math.min(1, Number(prefValue(SOUND_VOLUME_KEY, '10')) / 100)) }
+function autoScrollMode() { return prefValue(AUTO_SCROLL_KEY, 'smart') }
+function haptic(kind) {
+  if (!prefOn(HAPTIC_KEY) || document.visibilityState !== 'visible') return
+  try { nativeDevice?.haptic?.(kind) } catch (_) {}
+}
+function currentTitle() { return $('#chatTitle').textContent || 'Session' }
+function watchSession() {
+  if (!nativeDevice?.watch || !activeProfile || !activeSession || !prefOn(NOTIFY_KEY)) return
+  try {
+    if (nativeDevice.notificationsAllowed && !nativeDevice.notificationsAllowed() && !localStorage.getItem(NOTIFY_ASKED_KEY)) {
+      localStorage.setItem(NOTIFY_ASKED_KEY, '1')
+      nativeDevice.requestNotifications()
+    }
+    nativeDevice.watch(activeProfile.id, activeSession, currentTitle(), activeProfile.url, activeProfile.directory || '')
+  } catch (_) {}
+}
+function unwatchSession(id) { try { nativeDevice?.unwatch?.(id) } catch (_) {} }
+function recordSession(state) {
+  if (!nativeDevice?.recordSession || !activeProfile || !activeSession) return
+  const sig = `${activeProfile.id}|${activeSession}|${state}|${currentTitle()}`
+  if (sig === recordedSig) return
+  recordedSig = sig
+  try { nativeDevice.recordSession(activeProfile.id, activeSession, currentTitle(), state) } catch (_) {}
+}
 
 function playSound(id, volume = 1) {
   const audio = $(id)
   if (!audio) return
-  try { audio.pause(); audio.currentTime = 0; audio.volume = Math.max(0, Math.min(1, volume * SOUND_GAIN)); audio.play().catch(() => {}) } catch (_) {}
+  try { audio.pause(); audio.currentTime = 0; audio.volume = Math.max(0, Math.min(1, volume * soundVolume())); audio.play().catch(() => {}) } catch (_) {}
 }
 
 function updateViewportInsets() {
@@ -77,9 +126,14 @@ function assistantText(messages) {
   return messages.filter((entry) => entry.info?.role === 'assistant').flatMap((entry) => (entry.parts || []).filter((part) => part.type === 'text' && part.text).map((part) => part.text)).join('\n')
 }
 
+function pinQuestionToTop() { pinUntil = Date.now() + 1800; requestAnimationFrame(focusLatestUserMessage) }
+
+// Runs only right after sending (while the keyboard closes and the layout settles).
+// Any touch or scroll by the user cancels it, so it never pulls the view back.
 function focusLatestUserMessage() {
+  if (Date.now() > pinUntil) return
   const container = $('#messages')
-  const users = container?.querySelectorAll(':scope > .message.user') || []
+  const users = container?.querySelectorAll(':scope > .message.user:not(.file-message)') || []
   const message = users[users.length - 1]
   if (!container || !message || !focusedPromptText) return
   container.scrollTo({ top: Math.max(0, message.offsetTop - 10), behavior: 'smooth' })
@@ -95,7 +149,7 @@ function showOptimisticPrompt(text, raw = text, textFiles = []) {
   const node = container.lastElementChild
   node.__text = text
   node.__raw = raw
-  requestAnimationFrame(focusLatestUserMessage)
+  pinQuestionToTop()
   return node
 }
 
@@ -122,7 +176,7 @@ function show(id) {
 function syncChatBackground() {
   const video = $('#chatBackground')
   if (!video) return
-  const animatedScreens = ['#sessionsScreen', '#projectsScreen', '#modelsScreen', '#chatScreen']
+  const animatedScreens = ['#sessionsScreen', '#projectsScreen', '#modelsScreen', '#settingsScreen', '#chatScreen']
   const onVideoScreen = animatedScreens.includes(currentScreen)
   document.body.dataset.video = onVideoScreen ? '1' : '0'
   const shouldPlay = onVideoScreen && !document.hidden && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -143,6 +197,34 @@ function beginTypewriter(key, text) {
   typewriter.timer = setInterval(tickTypewriter, 24)
 }
 
+/* Keep one DOM tree while a long answer is being revealed. Re-parsing all of
+   the accumulated Markdown every 24 ms made Android WebView repeatedly repaint
+   the large blurred glass layer and animated border, which could flash on long
+   responses. Markdown is parsed once, when the response is complete. */
+function renderLiveText(bubble, text) {
+  if (!bubble.__liveTextNode) {
+    const liveText = document.createTextNode('')
+    const caret = document.createElement('span')
+    caret.className = 'caret'
+    caret.setAttribute('aria-hidden', 'true')
+    bubble.replaceChildren(liveText, caret)
+    bubble.__liveTextNode = liveText
+    bubble.__liveRaw = ''
+    bubble.classList.add('live-text')
+  }
+  const previous = bubble.__liveRaw || ''
+  if (text.startsWith(previous)) bubble.__liveTextNode.appendData(text.slice(previous.length))
+  else bubble.__liveTextNode.data = text
+  bubble.__liveRaw = text
+}
+
+function finishLiveText(bubble, text) {
+  bubble.classList.remove('live-text')
+  delete bubble.__liveTextNode
+  delete bubble.__liveRaw
+  bubble.innerHTML = renderMarkdown(text)
+}
+
 function tickTypewriter() {
   const bubble = document.querySelector('[data-typewriter-active="true"]')
   if (!bubble) return
@@ -150,15 +232,16 @@ function tickTypewriter() {
     // Catch up faster when the model is far ahead of the reveal.
     const backlog = typewriter.target.length - typewriter.count
     typewriter.count = Math.min(typewriter.target.length, typewriter.count + Math.max(1, Math.ceil(backlog / 45)))
-    bubble.innerHTML = renderMarkdown(typewriter.target.slice(0, typewriter.count), { caret: true })
-    bubble.scrollIntoView({ block: 'nearest' })
+    renderLiveText(bubble, typewriter.target.slice(0, typewriter.count))
+    afterGrowth()
   } else if (Date.now() - typewriter.lastGrowth > 6000) {
     bubble.__live = false
     bubble.__text = typewriter.target
     bubble.classList.remove('live')
     delete bubble.dataset.typewriterActive
-    bubble.innerHTML = renderMarkdown(typewriter.target)
+    finishLiveText(bubble, typewriter.target)
     resetTypewriter()
+    afterGrowth()
   }
 }
 
@@ -186,9 +269,13 @@ function placeThinking() {
 
 function updateSendMode() {
   const send = $('#sendButton')
-  send.classList.toggle('stop', sessionBusy)
-  send.setAttribute('aria-label', sessionBusy ? 'Stop response' : 'Send')
-  send.querySelector('use').setAttribute('href', sessionBusy ? '#i-stop' : '#i-arrow-up')
+  const hasInput = $('#promptInput').value.trim().length > 0 || pendingFiles.length > 0
+  const mode = sessionBusy ? (hasInput ? 'queue' : 'stop') : 'send'
+  send.classList.toggle('stop', mode === 'stop')
+  send.classList.toggle('queue', mode === 'queue')
+  send.setAttribute('aria-label', mode === 'stop' ? 'Stop response' : mode === 'queue' ? 'Add to queue' : 'Send')
+  send.querySelector('use').setAttribute('href', mode === 'stop' ? '#i-stop' : '#i-arrow-up')
+  $('#promptInput').placeholder = sessionBusy ? 'Queue a message…' : 'Ask OpenCode anything…'
 }
 
 function stopThinking() {
@@ -210,6 +297,7 @@ function startThinking() {
   $('#chatState').textContent = 'WORKING'
   placeThinking()
   if (wasRunning) return
+  watchSession(); recordSession('working')
   fallbackIndex = 0
   thinkingLabel.textContent = THINKING_FALLBACK[0]
   announce('OpenCode is working')
@@ -253,10 +341,23 @@ function applyBusy(messages) {
     liveStatus = liveStatusFor(messages)
     if (liveStatus) thinkingLabel.textContent = liveStatus
   } else if (sessionBusy) {
+    const finishedSession = activeSession
     stopThinking()
     const lastText = assistantText(messages).split('\n').pop() || ''
     announce(`OpenCode finished. ${lastText.slice(0, 160)}`)
+    onTaskFinished(finishedSession, messages)
   }
+}
+
+function onTaskFinished(sessionId, messages) {
+  const info = messages[messages.length - 1]?.info
+  const aborted = info?.error?.name === 'MessageAbortedError'
+  recordSession(aborted ? 'idle' : 'done')
+  // When hidden, the native watcher owns the alert; when visible there is nothing left to watch.
+  if (document.visibilityState === 'visible') unwatchSession(sessionId)
+  if (aborted) return
+  const queued = (queues.get(sessionId) || []).length && !pausedSessions.has(sessionId)
+  if (!queued) haptic(info?.error ? 'error' : 'done')
 }
 
 function notify(message) {
@@ -338,7 +439,14 @@ function request(path, options = {}) {
     headers: { Authorization: `Bearer ${activeToken}`, 'Content-Type': 'application/json', ...(options.headers || {}) },
   }).catch((error) => { error.network = true; setOffline(true); throw error }).then(async (response) => {
     setOffline(false)
-    if (!response.ok) throw new Error((await response.text()) || `Server returned ${response.status}`)
+    if (!response.ok) {
+      const detail = await response.text()
+      const error = new Error(response.status === 401
+        ? 'This phone’s gateway credential is no longer accepted. It may have expired, been revoked, or the gateway may have been reset. Open Servers, edit this connection, and pair again with a fresh six-digit code.'
+        : detail || `Server returned ${response.status}`)
+      error.status = response.status
+      throw error
+    }
     if (response.status === 204) return null
     const body = await response.text()
     if (!body) return null
@@ -418,7 +526,7 @@ async function testProfile(tokenOverride = '') {
   $('#diagnosticResult').innerHTML = diagnosticRow('HTTPS address', true, 'Valid') + diagnosticRow('Gateway', null, 'Testing…') + diagnosticRow('Authentication', null, 'Testing…') + diagnosticRow('OpenCode', null, 'Testing…')
   try {
     const response = await fetch(new URL('/health', candidate.url), { headers: { Authorization: `Bearer ${token}` } })
-    if (response.status === 401) { $('#diagnosticResult').innerHTML = diagnosticRow('HTTPS address', true, 'Reached') + diagnosticRow('Gateway', true, 'Online') + diagnosticRow('Authentication', false, 'Token rejected') + diagnosticRow('OpenCode', null, 'Not tested'); throw new Error('access token was rejected') }
+    if (response.status === 401) { $('#diagnosticResult').innerHTML = diagnosticRow('HTTPS address', true, 'Reached') + diagnosticRow('Gateway', true, 'Online') + diagnosticRow('Authentication', false, 'Pair again') + diagnosticRow('OpenCode', null, 'Not tested'); throw new Error('This phone’s gateway credential is no longer accepted. Generate a fresh six-digit pairing code on the OpenCode computer, then tap Pair and test connection again.') }
     if (!response.ok) throw new Error(`gateway returned HTTP ${response.status}`)
     const health = await response.json()
     $('#diagnosticResult').innerHTML = diagnosticRow('HTTPS address', true, 'Secure') + diagnosticRow('Gateway', true, 'Online') + diagnosticRow('Authentication', true, 'Accepted') + diagnosticRow('OpenCode', !!health.opencode, health.opencode ? 'Ready' : 'Unavailable')
@@ -499,6 +607,7 @@ async function connectProfile(id) {
   if (!stored.ok) { notify(`Secure token read failed: ${stored.error}. Re-enter the token to repair this profile.`); return editProfile(id) }
   activeToken = stored.value
   if (!activeProfile || !stored.exists || !activeToken) return editProfile(id)
+  try { localStorage.setItem(LAST_PROFILE_KEY, id) } catch (_) {}
   $('#activeDirectory').textContent = activeProfile.directory || 'Default workspace'
   $('#projectConnectionName').textContent = activeProfile.name
   updateModelLabel()
@@ -525,22 +634,43 @@ async function loadSessions() {
     renderSessions()
   } catch (error) {
     setConnection('offline', 'OFFLINE')
-    setList(list, emptyState({ ic: 'alert', title: 'Connection failed', text: shortError(error), action: '<button class="secondary retry-button" id="retrySessions">Try again</button>' }), true)
+    const rejected = error?.status === 401
+    setList(list, emptyState({ ic: 'alert', title: rejected ? 'Pair this phone again' : 'Connection failed', text: shortError(error), action: rejected ? '<button class="primary retry-button" id="repairConnection">Repair connection</button>' : '<button class="secondary retry-button" id="retrySessions">Try again</button>' }), true)
   }
+}
+
+function readPins() { try { return JSON.parse(localStorage.getItem(PIN_KEY) || '{}') } catch (_) { return {} } }
+function pinnedIds() { return new Set((activeProfile && readPins()[activeProfile.id]) || []) }
+function setPinned(id, flag) {
+  if (!activeProfile) return
+  const pins = readPins()
+  const set = new Set(pins[activeProfile.id] || [])
+  if (flag) set.add(id); else set.delete(id)
+  pins[activeProfile.id] = [...set]
+  try { localStorage.setItem(PIN_KEY, JSON.stringify(pins)) } catch (_) {}
+}
+
+function sessionItemHtml(session, pinned) {
+  const title = session.title || 'Untitled session'
+  const current = session.id === activeSession ? ' current' : ''
+  const mark = pinned ? `<span class="pin-mark" title="Pinned">${icon('pin')}</span>` : ''
+  return `<div class="session-item${current}${pinned ? ' pinned' : ''}" role="button" tabindex="0" data-id="${esc(session.id)}" data-title="${esc(title)}"><span class="tile">${icon('chat')}</span><div class="meta"><strong>${mark}${esc(title)}</strong><small>${esc(relTime(session.time?.updated) || 'No activity yet')}</small></div><button type="button" class="session-more" data-more aria-label="Session options for ${esc(title)}">${icon('more')}</button></div>`
 }
 
 function renderSessions() {
   const list = $('#sessionList')
   const query = $('#sessionSearch').value.trim().toLowerCase()
   const sorted = query ? allSessions.filter((session) => String(session.title || 'Untitled session').toLowerCase().includes(query)) : allSessions
+  const pins = pinnedIds()
+  const pinnedRows = sorted.filter((session) => pins.has(session.id))
+  const rest = sorted.filter((session) => !pins.has(session.id))
   let lastGroup = ''
-  const html = sorted.map((session) => {
+  let html = pinnedRows.length ? `<div class="group-label pin-label">${icon('pin')}Pinned</div>${pinnedRows.map((session) => sessionItemHtml(session, true)).join('')}` : ''
+  html += rest.map((session) => {
     const group = dayLabel(session.time?.updated)
     const heading = group !== lastGroup ? `<div class="group-label">${group}</div>` : ''
     lastGroup = group
-    const title = session.title || 'Untitled session'
-    const current = session.id === activeSession ? ' current' : ''
-    return `${heading}<div class="session-item${current}" role="button" tabindex="0" data-id="${esc(session.id)}" data-title="${esc(title)}"><span class="tile">${icon('chat')}</span><div class="meta"><strong>${esc(title)}</strong><small>${esc(relTime(session.time?.updated) || 'No activity yet')}</small></div><button type="button" class="session-more" data-more aria-label="Session options for ${esc(title)}">${icon('more')}</button></div>`
+    return heading + sessionItemHtml(session, false)
   }).join('')
   const empty = query ? emptyState({ ic: 'search', title: 'No matches', text: 'No session title contains that text.' }) : emptyState({ ic: 'chat', title: 'No sessions yet', text: 'Tap + to start your first conversation.' })
   setList(list, html || empty, true)
@@ -549,12 +679,14 @@ function renderSessions() {
 function isWide() { return window.matchMedia('(min-width:840px)').matches }
 
 async function createSession() {
-  try { const session = await request('/session', { method: 'POST', body: '{}' }); await openSession(session.id, session.title || 'New session') }
+  const sessBody = { directory: activeProfile?.directory || '' }
+  try { const session = await request('/session', { method: 'POST', body: JSON.stringify(sessBody) }); await openSession(session.id, session.title || 'New session') }
   catch (error) { notify(error.message) }
 }
 
 function leaveChat() {
   saveDraft()
+  closeChatSearch()
   clearInterval(polling); polling = null
   stopEvents()
   stopThinking()
@@ -568,13 +700,19 @@ function schedulePoll() {
 
 async function openSession(id, title, options = {}) {
   if (activeSession && activeSession !== id) saveDraft()
-  stopEvents(); resetTypewriter(); stopThinking(); activeSession = id; lastAssistantText = ''; responseBaselineText = ''; waitingForAssistant = false; focusedPromptText = ''; sendGrace = 0
+  stopEvents(); resetTypewriter(); stopThinking(); activeSession = id; lastAssistantText = ''; responseBaselineText = ''; waitingForAssistant = false; focusedPromptText = ''; pinUntil = 0; sendGrace = 0
   renderedPermission = ''; $('#permissionArea').innerHTML = ''
+  todoSig = ''; setTodos([])
+  try { nativeDevice?.clearNotifications?.(id) } catch (_) {}
   const container = $('#messages')
   container.classList.remove('focus-latest'); delete container.dataset.ready; container.innerHTML = skeletons(2)
-  $('#toBottom').classList.remove('show')
+  $('#toBottom').classList.remove('show', 'has-new')
+  follow = true; pendingNew = false; lastScrollH = 0; lastMessages = []
+  closeChatSearch(); $('#chatSearchInput').value = ''
+  $('#chatUsage').hidden = true
+  renderQueue()
   pendingFiles = []; renderTray()
-  $('#chatTitle').textContent = title; show('#chatScreen'); restoreDraft()
+  $('#chatTitle').textContent = title; show('#chatScreen'); restoreDraft(); recordSession('idle')
   if (options.prefill) { $('#promptInput').value = options.prefill; updateComposer() }
   applyPendingShare()
   updateViewportInsets()
@@ -623,6 +761,7 @@ function handleEventChunk(chunk) {
   const type = String(event.type || '')
   const props = event.properties || {}
   const sessionID = props.sessionID || props.info?.sessionID || props.part?.sessionID
+  if (type === 'todo.updated') { if (sessionID === activeSession && Array.isArray(props.todos)) setTodos(props.todos); return }
   if (type.startsWith('permission.')) { if (!sessionID || sessionID === activeSession) loadPermissions(true); return }
   if (type === 'session.updated' || type === 'session.created' || type === 'session.deleted') {
     if (isWide() && currentScreen === '#chatScreen') loadSessions()
@@ -640,6 +779,7 @@ async function startEvents() {
   let buffer = ''
   try {
     const response = await fetch(apiUrl('/event'), { headers: { Authorization: `Bearer ${activeToken}`, Accept: 'text/event-stream' }, signal: controller.signal })
+    if (response.status === 401) { const error = new Error('This phone must be paired with the gateway again.'); error.status = 401; throw error }
     if (!response.ok || !response.body) throw new Error('Event stream unavailable')
     eventsLive = true; eventRetry = 0; lastEventAt = Date.now()
     setOffline(false); schedulePoll(); scheduleRefresh()
@@ -654,6 +794,10 @@ async function startEvents() {
     }
   } catch (error) {
     if (controller.signal.aborted) return
+    if (error.status === 401) {
+      $('#chatState').textContent = 'PAIR AGAIN'
+      if (Date.now() - tokenWarningAt > 10000) { tokenWarningAt = Date.now(); notify('Gateway access expired or was revoked. Open Servers, edit this connection, and pair again with a fresh six-digit code.') }
+    }
     if (error.name === 'TypeError') setOffline(true)
   }
   if (controller.signal.aborted || eventAbort !== controller || session !== activeSession) return
@@ -676,11 +820,11 @@ function messageItems(messages) {
     const items = []
     ;(entry.parts || []).forEach((part, index) => {
       const key = `${base}:${part.id || index}`
-      if (part.type === 'tool') items.push({ key, kind: 'tool', part, sig: `${part.state?.status}|${toolSummary(part)}` })
+      if (part.type === 'tool') items.push({ key, kind: 'tool', part, sig: toolSig(part) })
       else if (part.type === 'text' && part.text) items.push({ key, kind: role, text: part.text, time: created })
       else if (part.type === 'file' && role === 'user') items.push({ key, kind: 'file', part })
     })
-    if (entry.info?.error) items.push({ key: `${base}:error`, kind: 'error', text: formatModelError(entry.info.error) })
+    if (entry.info?.error) items.push({ key: `${base}:error`, kind: 'error', text: formatModelError(entry.info.error), aborted: entry.info.error?.name === 'MessageAbortedError' })
     return items
   })
 }
@@ -696,9 +840,9 @@ function fileChipHtml(name, thumb) {
   return `<div class="file-chip">${thumb ? `<img src="${esc(thumb)}" alt="${esc(name)}">` : icon('clip')}${thumb ? '' : `<span>${esc(name)}</span>`}</div>`
 }
 
+const ACTION_META = { copy: { label: 'Copy', ic: 'copy' }, edit: { label: 'Edit', ic: 'edit' }, retry: { label: 'Retry', ic: 'refresh' } }
 function messageActions(kinds) {
-  const labels = { copy: 'Copy', edit: 'Edit' }
-  return `<div class="msg-actions">${kinds.map((kind) => `<button type="button" class="msg-action" data-msg-action="${kind}" aria-label="${labels[kind]}">${icon(kind)}<span>${labels[kind]}</span></button>`).join('')}</div>`
+  return `<div class="msg-actions">${kinds.map((kind) => `<button type="button" class="msg-action" data-msg-action="${kind}" aria-label="${ACTION_META[kind].label}">${icon(ACTION_META[kind].ic)}<span>${ACTION_META[kind].label}</span></button>`).join('')}</div>`
 }
 
 function messageNode(item) {
@@ -709,7 +853,7 @@ function messageNode(item) {
     const chips = stripped.names.map((name) => fileChipHtml(name)).join('')
     holder.innerHTML = `<div class="message user">${stripped.clean ? `<div class="bubble">${esc(stripped.clean)}</div>` : ''}${chips}${messageActions(['copy', 'edit'])}</div>`
   }
-  else if (item.kind === 'assistant') holder.innerHTML = `<div class="message assistant"><div class="msg-meta"><span class="avatar-mini"><img src="logo-sm.png" alt=""></span><span>OpenCode</span>${item.time ? `<time>${esc(new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</time>` : ''}</div><div class="bubble md"></div>${messageActions(['copy'])}</div>`
+  else if (item.kind === 'assistant') holder.innerHTML = `<div class="message assistant"><div class="msg-meta"><span class="avatar-mini"><img src="logo-sm.png" alt=""></span><span>OpenCode</span>${item.time ? `<time>${esc(new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</time>` : ''}</div><div class="bubble md"></div>${messageActions(['copy', 'retry'])}</div>`
   else if (item.kind === 'file') {
     const part = item.part
     const name = part.filename || 'attachment'
@@ -717,10 +861,10 @@ function messageNode(item) {
     holder.innerHTML = `<div class="message user file-message">${fileChipHtml(name, thumb)}</div>`
   }
   else if (item.kind === 'tool') holder.innerHTML = `<div class="message tool-message">${toolChipHtml(item.part)}</div>`
-  else holder.innerHTML = `<div class="message error-message"><div class="msg-meta">Model error</div><div class="bubble">${esc(item.text)}</div></div>`
+  else holder.innerHTML = `<div class="message error-message"><div class="msg-meta">${item.aborted ? 'Stopped' : 'Model error'}</div><div class="bubble">${esc(item.text)}</div>${messageActions(['retry'])}</div>`
   const node = holder.firstElementChild
   node.dataset.key = item.key
-  if (item.kind === 'tool') node.__sig = item.sig
+  if (item.kind === 'tool') { node.__sig = item.sig; node.__part = item.part; node.__open = false }
   if (item.kind === 'user') { node.__text = stripped.clean; node.__raw = item.text }
   return node
 }
@@ -728,22 +872,24 @@ function messageNode(item) {
 function syncAssistant(node, text, displayed, active) {
   const bubble = node.querySelector('.bubble')
   if (active) {
-    if (!bubble.__live) { bubble.__live = true; bubble.innerHTML = renderMarkdown(displayed, { caret: true }) }
+    let changed = false
+    if (!bubble.__live) { bubble.__live = true; renderLiveText(bubble, displayed); changed = true }
     bubble.classList.add('live')
     bubble.dataset.typewriterActive = 'true'
-    return
+    return changed
   }
   const wasLive = bubble.__live
   if (wasLive) { bubble.__live = false; bubble.classList.remove('live'); delete bubble.dataset.typewriterActive }
-  if (wasLive || bubble.__text !== text) { bubble.innerHTML = renderMarkdown(text); bubble.__text = text }
+  if (wasLive || bubble.__text !== text) { finishLiveText(bubble, text); bubble.__text = text; return true }
+  return false
 }
 
 /* Keyed reconciliation: existing messages stay in the DOM (no flicker, scroll
    position and text selection survive polling) and only new ones animate in. */
 function reconcileMessages(items, newestKey, responseArrived) {
   const container = $('#messages')
-  const wasNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 160
   const firstRender = !container.dataset.ready
+  let changed = false
   container.querySelectorAll(':scope > .skeleton, :scope > .empty').forEach((node) => node.remove())
   if (!items.length && !container.querySelector(':scope > .message')) {
     container.innerHTML = emptyState({ ic: 'sparkle', title: 'Start a conversation', text: 'Ask OpenCode to explain, build or debug something in this project.' })
@@ -761,28 +907,42 @@ function reconcileMessages(items, newestKey, responseArrived) {
       existing.set(lastUser.key, optimistic)
     }
   }
+  const byKey = new Map()
   let anchor = null
-  let added = false
   items.forEach((item) => {
     let node = existing.get(item.key)
     existing.delete(item.key)
     const isNewest = item.kind === 'assistant' && item.key === newestKey
     const displayed = isNewest ? updateTypewriter(item.key, item.text, responseArrived) : item.text
     const active = item.kind === 'assistant' && typewriter.key === item.key
-    if (!node) { node = messageNode(item); if (!firstRender) node.classList.add('enter'); added = true }
-    if (item.kind === 'assistant') { node.__fullText = item.text; syncAssistant(node, item.text, displayed, active) }
-    else if (item.kind === 'tool' && node.__sig !== item.sig) { node.__sig = item.sig; node.innerHTML = toolChipHtml(item.part) }
+    if (!node) { node = messageNode(item); if (!firstRender) node.classList.add('enter'); changed = true }
+    if (item.kind === 'assistant') { node.__fullText = item.text; if (syncAssistant(node, item.text, displayed, active)) changed = true }
+    else if (item.kind === 'tool' && node.__sig !== item.sig) {
+      node.__sig = item.sig; node.__part = item.part
+      node.innerHTML = toolChipHtml(item.part, !!node.__open)
+      changed = true
+    }
+    byKey.set(item.key, node)
     const spot = anchor ? anchor.nextElementSibling : container.firstElementChild
     if (spot !== node) container.insertBefore(node, spot)
     anchor = node
   })
+  if (existing.size) changed = true
   existing.forEach((node) => node.remove())
   const pending = container.querySelector(':scope > .message.optimistic')
   if (pending) container.appendChild(pending)
+  // The Retry action only belongs on the final reply (or error) of the conversation.
+  container.querySelectorAll(':scope > .message.is-last').forEach((node) => node.classList.remove('is-last'))
+  for (let index = items.length - 1; index >= 0; index--) {
+    const kind = items[index].kind
+    if (kind === 'user' || kind === 'file') break
+    if (kind === 'assistant' || kind === 'error') { byKey.get(items[index].key)?.classList.add('is-last'); break }
+  }
   placeThinking()
   container.dataset.ready = '1'
-  if (firstRender) requestAnimationFrame(() => { container.scrollTop = container.scrollHeight })
-  else if (added && wasNearBottom && !focusedPromptText) requestAnimationFrame(() => container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' }))
+  if (firstRender) requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; follow = true; pendingNew = false; lastScrollH = container.scrollHeight; syncBottomButton() })
+  else if (changed) afterGrowth()
+  if (changed) refreshChatSearch()
 }
 
 async function loadMessages() {
@@ -799,10 +959,19 @@ async function loadMessages() {
     const newestAssistant = assistantParts[assistantParts.length - 1]
     const newestKey = newestAssistant ? `${newestAssistant.entry.info?.id || 'assistant'}:${newestAssistant.part.id || newestAssistant.index}` : ''
     reconcileMessages(messageItems(messages), newestKey, responseArrived)
+    lastMessages = messages
     applyBusy(messages)
+    renderUsage(messages)
+    setTodos(todosFromMessages(messages))
+    const lastInfo = messages[messages.length - 1]?.info
+    if (lastInfo?.role === 'assistant' && lastInfo.error && (queues.get(session) || []).length && !pausedSessions.has(session)) { pausedSessions.add(session); renderQueue() }
     if (!sessionBusy) $('#chatState').textContent = 'CONNECTED'
-    if (focusedPromptText) { $('#messages').classList.add('focus-latest'); requestAnimationFrame(focusLatestUserMessage) }
-  } catch (_) { $('#chatState').textContent = 'RETRYING' }
+    if (focusedPromptText) { $('#messages').classList.add('focus-latest'); focusLatestUserMessage() }
+    if (!sessionBusy) maybeFlushQueue()
+  } catch (error) {
+    $('#chatState').textContent = error?.status === 401 ? 'PAIR AGAIN' : 'RETRYING'
+    if (error?.status === 401 && Date.now() - tokenWarningAt > 10000) { tokenWarningAt = Date.now(); notify(shortError(error)) }
+  }
   loadPermissions()
 }
 
@@ -817,21 +986,20 @@ async function loadPermissions(force = false) {
     if (signature === renderedPermission) return
     renderedPermission = signature
     $('#permissionArea').innerHTML = permission ? `<div class="permission" role="alert"><p><strong>Permission required</strong><br>${escapeHTML(permission.title || permission.permission || 'OpenCode requests approval')}</p><div><button data-answer="reject" class="secondary">Deny</button><button data-answer="once" class="primary">Allow once</button></div></div>` : ''
-    if (permission) announce('Permission required')
+    if (permission) { announce('Permission required'); haptic('attention') }
     document.querySelectorAll('[data-answer]').forEach((button) => button.addEventListener('click', () => replyPermission(permission.id, button.dataset.answer)))
   } catch (_) {}
 }
 
 async function replyPermission(id, reply) {
-  try { await request(`/permission/${id}/reply`, { method: 'POST', body: JSON.stringify({ reply }) }); renderedPermission = ''; $('#permissionArea').innerHTML = '' }
+  try { await request(`/permission/${id}/reply`, { method: 'POST', body: JSON.stringify({ reply }) }); renderedPermission = ''; $('#permissionArea').innerHTML = ''; try { nativeDevice?.clearNotifications?.(activeSession) } catch (_) {} }
   catch (error) { notify(error.message) }
 }
 
 async function sendPrompt(event) {
   event.preventDefault()
-  if (sessionBusy) return abortSession()
   const typed = $('#promptInput').value.trim()
-  if (!typed && !pendingFiles.length) return
+  if (!typed && !pendingFiles.length) return sessionBusy ? abortSession() : undefined
   if (selectedModel && !providers) {
     try { providers = await request('/provider') }
     catch (error) { return notify(`Could not verify selected model: ${error.message}`) }
@@ -845,28 +1013,97 @@ async function sendPrompt(event) {
   const shown = typed || 'See the attached file.'
   const inline = textFiles.map((file) => `\n\n<attached file="${file.name.replace(/"/g, "'")}">\n${file.text}\n</attached>`).join('')
   const promptText = shown + inline
-  const body = {
-    parts: [{ type: 'text', text: promptText }, ...binaryFiles.map((file) => ({ type: 'file', mime: file.mime, filename: file.name, url: file.dataUrl }))],
-    ...(selectedModel ? { model: { providerID: selectedModel.providerID, modelID: selectedModel.modelID } } : {}),
+  const entry = {
+    body: {
+      parts: [{ type: 'text', text: promptText }, ...binaryFiles.map((file) => ({ type: 'file', mime: file.mime, filename: file.name, url: file.dataUrl }))],
+      ...(selectedModel ? { model: { providerID: selectedModel.providerID, modelID: selectedModel.modelID } } : {}),
+    },
+    shown,
+    raw: promptText,
+    names: textFiles.map((file) => file.name),
   }
+  $('#promptInput').value = ''; pendingFiles = []; renderTray(); saveDraft(); updateComposer(); tap()
+  const queued = queues.get(activeSession) || []
+  // While OpenCode is busy (or earlier items are still waiting) new instructions join the queue.
+  if (sessionBusy || (queued.length && !pausedSessions.has(activeSession))) return enqueue(entry)
+  pausedSessions.delete(activeSession)
+  $('#promptInput').blur()
+  await submitEntry(entry)
+}
+
+async function submitEntry(entry) {
+  const { body, shown, raw, names = [] } = entry
+  const session = activeSession
   responseBaselineText = lastAssistantText
   waitingForAssistant = true
-  focusedPromptText = promptText
+  focusedPromptText = raw
   sendGrace = Date.now() + 8000
-  $('#promptInput').value = ''; pendingFiles = []; renderTray(); saveDraft(); updateComposer(); tap(); $('#promptInput').blur()
-  const node = showOptimisticPrompt(shown, promptText, textFiles.map((file) => file.name))
+  follow = true; pendingNew = false
+  const node = showOptimisticPrompt(shown, raw, names)
   playSound('#soundSent', .9); startThinking(); updateViewportInsets()
-  try { await request(`/session/${activeSession}/prompt_async`, { method: 'POST', body: JSON.stringify(body) }); await loadMessages() }
+  try { await request(`/session/${session}/prompt_async`, { method: 'POST', body: JSON.stringify(body) }); await loadMessages() }
   catch (error) {
     waitingForAssistant = false; sendGrace = 0
     if (error.network) {
-      outbox.push({ session: activeSession, body, node })
+      outbox.push({ session, body, node })
       node.insertAdjacentHTML('beforeend', '<span class="queued-note">Not sent · will retry automatically</span>')
       stopThinking(); notify('No connection. Message queued.')
       return
     }
     focusedPromptText = ''; $('#messages').classList.remove('focus-latest'); stopThinking(); notify(error.message); loadMessages()
   }
+}
+
+/* ── Retry / regenerate ─────────────────────────────────────────────────── */
+function retryLast() {
+  if (sessionBusy || !activeSession) return
+  const entry = [...lastMessages].reverse().find((item) => item.info?.role === 'user')
+  if (!entry) return notify('Nothing to retry')
+  const parts = entry.parts || []
+  const texts = parts.filter((part) => part.type === 'text' && part.text && !part.synthetic)
+  const files = parts.filter((part) => part.type === 'file' && part.url)
+  if (!texts.length && !files.length) return notify('Nothing to retry')
+  const raw = texts.map((part) => part.text).join('\n')
+  const model = selectedModel ? { providerID: selectedModel.providerID, modelID: selectedModel.modelID } : (entry.info?.model?.providerID ? { providerID: entry.info.model.providerID, modelID: entry.info.model.modelID } : null)
+  const body = {
+    parts: [...(raw ? [{ type: 'text', text: raw }] : []), ...files.map((part) => ({ type: 'file', mime: part.mime, filename: part.filename, url: part.url }))],
+    ...(model ? { model } : {}),
+  }
+  const { clean, names } = splitAttachments(raw)
+  tap()
+  pausedSessions.delete(activeSession)
+  submitEntry({ body, shown: clean || 'See the attached file.', raw, names })
+}
+
+/* ── Message queue ──────────────────────────────────────────────────────── */
+function enqueue(entry) {
+  const list = queues.get(activeSession) || []
+  list.push(entry)
+  queues.set(activeSession, list)
+  renderQueue()
+  notify('Queued · runs after the current task')
+}
+
+function renderQueue() {
+  const tray = $('#queueTray')
+  const list = (activeSession && queues.get(activeSession)) || []
+  tray.hidden = !list.length
+  if (!list.length) tray.innerHTML = ''
+  else {
+    const paused = pausedSessions.has(activeSession)
+    const head = `<div class="queue-head"><b>${icon('list')}${paused ? 'Paused' : 'Queued'} · ${list.length}</b>${paused ? '<button type="button" class="queue-resume" data-queue-resume>Resume</button>' : '<small>Runs when OpenCode finishes</small>'}</div>`
+    tray.innerHTML = head + list.map((entry, index) => `<div class="queue-item"><span>${esc(entry.shown.split('\n')[0])}${entry.names.length ? ` · ${entry.names.length} file${entry.names.length === 1 ? '' : 's'}` : ''}</span><button type="button" data-queue-remove="${index}" aria-label="Remove from queue">${icon('x')}</button></div>`).join('')
+  }
+  updateSendMode()
+}
+
+function maybeFlushQueue() {
+  const list = queues.get(activeSession)
+  if (!list || !list.length || pausedSessions.has(activeSession) || sessionBusy || offline || flushing || Date.now() < sendGrace) return
+  const entry = list.shift()
+  renderQueue()
+  flushing = true
+  Promise.resolve(submitEntry(entry)).finally(() => { flushing = false })
 }
 
 async function flushOutbox() {
@@ -891,6 +1128,7 @@ async function abortSession() {
   try {
     await request(`/session/${activeSession}/abort`, { method: 'POST' })
     sendGrace = 0; waitingForAssistant = false
+    if ((queues.get(activeSession) || []).length) { pausedSessions.add(activeSession); renderQueue() }
     notify('Stopped'); announce('Stopped')
     await loadMessages()
   } catch (error) { notify(shortError(error)) }
@@ -942,6 +1180,7 @@ function renderTray() {
   tray.hidden = !pendingFiles.length
   tray.innerHTML = pendingFiles.map((file, index) => `<div class="attach-chip">${file.dataUrl && file.mime.startsWith('image/') ? `<img src="${esc(file.dataUrl)}" alt="">` : icon('file')}<span>${esc(file.name)}</span><button type="button" data-remove="${index}" aria-label="Remove ${esc(file.name)}">${icon('x')}</button></div>`).join('')
   $('#sendButton').classList.toggle('ready', pendingFiles.length > 0 || $('#promptInput').value.trim().length > 0)
+  updateSendMode()
 }
 
 window.voiceResult = (text) => {
@@ -973,6 +1212,65 @@ async function applyPendingShare() {
   notify('Shared content added')
 }
 
+/* ── Conversation export ───────────────────────────────────────────────── */
+function markdownFilename() {
+  const clean = ($('#chatTitle').textContent || 'OpenCode conversation').trim().replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').slice(0, 80)
+  return `${clean || 'OpenCode conversation'}.md`
+}
+
+function conversationMarkdown() {
+  const title = ($('#chatTitle').textContent || 'OpenCode conversation').trim()
+  const lines = [`# ${title}`, '', `> Exported from OpenCode Unofficial on ${new Date().toLocaleString()}.`]
+  if (activeProfile?.name) lines.push(`> Server: ${activeProfile.name}`)
+  if (activeProfile?.directory) lines.push(`> Project: \`${activeProfile.directory.replace(/`/g, '\\`')}\``)
+  lines.push('')
+  for (const entry of lastMessages) {
+    const role = entry.info?.role === 'user' ? 'You' : entry.info?.role === 'assistant' ? 'OpenCode' : 'System'
+    const when = entry.info?.time?.created || entry.info?.time?.completed
+    lines.push(`## ${role}${when ? ` · ${new Date(when).toLocaleString()}` : ''}`, '')
+    let wrote = false
+    for (const part of entry.parts || []) {
+      if (part.type === 'text' && part.text) { lines.push(part.text.trim(), ''); wrote = true }
+      else if (part.type === 'file') { lines.push(`- Attachment: **${part.filename || part.name || 'file'}**`, ''); wrote = true }
+      else if (part.type === 'tool') {
+        const status = part.state?.status || 'recorded'
+        lines.push(`> Tool: \`${part.tool || 'tool'}\` — ${status}`, '')
+        wrote = true
+      }
+    }
+    if (!wrote) lines.push('_No text content._', '')
+  }
+  return lines.join('\n').trim() + '\n'
+}
+
+function openExportSheet() {
+  if (!activeSession || !lastMessages.length) return notify('There is no conversation to export yet')
+  $('#exportSheet').hidden = false
+}
+
+function saveConversationMarkdown() {
+  const filename = markdownFilename()
+  const markdown = conversationMarkdown()
+  if (window.AndroidFiles?.exportText) return window.AndroidFiles.exportText(filename, markdown)
+  const link = document.createElement('a')
+  link.href = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }))
+  link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000)
+  $('#exportSheet').hidden = true; notify('Markdown saved')
+}
+
+async function shareConversationMarkdown() {
+  const filename = markdownFilename()
+  const markdown = conversationMarkdown()
+  if (window.AndroidFiles?.shareText) { window.AndroidFiles.shareText(filename, markdown); $('#exportSheet').hidden = true; return }
+  try { await navigator.share({ title: filename.replace(/\.md$/, ''), text: markdown }); $('#exportSheet').hidden = true }
+  catch (error) { if (error?.name !== 'AbortError') notify('Sharing is not available on this device') }
+}
+
+window.conversationExportFinished = (ok, message) => {
+  if (ok) $('#exportSheet').hidden = true
+  notify(message)
+}
+
 /* ── Session menu, edit & branch ────────────────────────────────────────── */
 function openSessionSheet(id, title) {
   sheetSession = { id, title }
@@ -980,6 +1278,7 @@ function openSessionSheet(id, title) {
   $('#sessionRename').value = title
   const del = $('#deleteSession')
   del.dataset.armed = ''; del.textContent = 'Delete session'
+  $('#pinSession').textContent = pinnedIds().has(id) ? 'Unpin from top' : 'Pin to top'
   $('#sessionSheet').hidden = false
 }
 
@@ -1002,6 +1301,7 @@ async function deleteSessionNow() {
   try {
     await request(`/session/${sheetSession.id}`, { method: 'DELETE' })
     const wasActive = sheetSession.id === activeSession
+    setPinned(sheetSession.id, false); queues.delete(sheetSession.id); pausedSessions.delete(sheetSession.id)
     const drafts = readDrafts(); delete drafts[sheetSession.id]; try { localStorage.setItem(DRAFT_KEY, JSON.stringify(drafts)) } catch (_) {}
     $('#sessionSheet').hidden = true; notify('Session deleted')
     if (wasActive) { leaveChat(); show('#sessionsScreen') }
@@ -1121,6 +1421,7 @@ function updateModelLabel() {
 
 function formatModelError(error) {
   if (typeof error === 'string') return error
+  if (error?.name === 'MessageAbortedError') return 'The reply was stopped before it finished.'
   return error?.data?.message || error?.message || error?.name || 'The selected model failed to respond.'
 }
 
@@ -1250,14 +1551,16 @@ function addCopyButtons() {
 }
 window.handleAndroidBack = function () {
   if (!$('#intro').hidden) { closeIntro(); return true }
+  if (!$('#exportSheet').hidden) { $('#exportSheet').hidden = true; return true }
   if (!$('#sessionSheet').hidden) { $('#sessionSheet').hidden = true; return true }
   if (!$('#providerSheet').hidden) { $('#providerSheet').hidden = true; return true }
   if (!$('#deviceSheet').hidden) { $('#deviceSheet').hidden = true; return true }
   if (!$('#statusSheet').hidden) { $('#statusSheet').hidden = true; return true }
   if (!$('#setupGuide').hidden) { closeGuide(); return true }
+  if (currentScreen === '#chatScreen' && searchOpen()) { closeChatSearch(); return true }
   if (currentScreen === '#chatScreen') { leaveChat(); show('#sessionsScreen'); loadSessions(); return true }
   if (currentScreen === '#projectsScreen' || currentScreen === '#modelsScreen') { show('#sessionsScreen'); return true }
-  if (currentScreen === '#editorScreen' || currentScreen === '#welcomeScreen') { editingId = null; show('#connectionsScreen'); return true }
+  if (currentScreen === '#editorScreen' || currentScreen === '#welcomeScreen' || currentScreen === '#settingsScreen') { editingId = null; show('#connectionsScreen'); return true }
   if (currentScreen === '#sessionsScreen') { activeProfile = null; activeToken = ''; show('#connectionsScreen'); return true }
   return false
 }
@@ -1265,6 +1568,8 @@ function escapeHTML(value) { const node = document.createElement('div'); node.te
 function formatTime(value) { return value ? new Date(value).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '' }
 
 $('#addProfile').addEventListener('click', () => editProfile())
+$('#openSettings').addEventListener('click', () => { syncPhoneCard(); show('#settingsScreen') })
+$('#backFromSettings').addEventListener('click', () => show('#connectionsScreen'))
 $('#helpButton').addEventListener('click', openGuide)
 $('#profileHelp').addEventListener('click', openGuide)
 $('#skipWelcome').addEventListener('click', () => { localStorage.setItem(WELCOME_KEY, 'seen'); show('#connectionsScreen') })
@@ -1302,6 +1607,10 @@ $('#refreshSessions').addEventListener('click', loadSessions)
 $('#createSession').addEventListener('click', createSession)
 $('#backSessions').addEventListener('click', () => { leaveChat(); show('#sessionsScreen'); loadSessions() })
 $('#reloadMessages').addEventListener('click', loadMessages)
+$('#exportConversation').addEventListener('click', openExportSheet)
+$('#closeExportSheet').addEventListener('click', () => { $('#exportSheet').hidden = true })
+$('#saveConversation').addEventListener('click', saveConversationMarkdown)
+$('#shareConversation').addEventListener('click', shareConversationMarkdown)
 $('#promptForm').addEventListener('submit', sendPrompt)
 $('#modelPicker').addEventListener('click', loadModels)
 $('#backFromProjects').addEventListener('click', () => show('#sessionsScreen'))
@@ -1342,6 +1651,7 @@ $('#profileList').addEventListener('click', (event) => {
 })
 $('#sessionList').addEventListener('click', (event) => {
   if (event.target.closest('#retrySessions')) return loadSessions()
+  if (event.target.closest('#repairConnection')) return activeProfile && editProfile(activeProfile.id)
   const item = event.target.closest('.session-item')
   if (!item) return
   if (event.target.closest('[data-more]')) return openSessionSheet(item.dataset.id, item.dataset.title)
@@ -1369,7 +1679,7 @@ $('#micButton').addEventListener('click', () => {
   if (window.AndroidDevice && typeof window.AndroidDevice.voice === 'function') window.AndroidDevice.voice()
   else notify('Voice input is not available in this build')
 })
-$('#promptInput').addEventListener('input', () => { clearTimeout(draftTimer); draftTimer = setTimeout(saveDraft, 400); renderTray() })
+$('#promptInput').addEventListener('input', () => { clearTimeout(draftTimer); draftTimer = setTimeout(saveDraft, 400); renderTray(); updateSendMode() })
 $('#netBanner').addEventListener('click', () => { if (activeSession) { loadMessages(); startEvents() } else loadSessions() })
 window.addEventListener('offline', () => setOffline(true))
 window.addEventListener('online', () => { if (activeSession) { loadMessages(); startEvents() } })
@@ -1382,15 +1692,202 @@ $('#modelList').addEventListener('click', (event) => {
   const item = event.target.closest('.model-item')
   if (item) selectModel(item.dataset.provider, item.dataset.model, item.dataset.name)
 })
+const cancelPin = () => { pinUntil = 0 }
+;['touchstart', 'wheel', 'pointerdown', 'keydown'].forEach((name) => $('#messages').addEventListener(name, cancelPin, { passive: true }))
 $('#messages').addEventListener('scroll', () => {
   const container = $('#messages')
-  $('#toBottom').classList.toggle('show', container.scrollHeight - container.scrollTop - container.clientHeight > 260)
+  const mode = autoScrollMode()
+  follow = mode === 'always' || (mode === 'smart' && distanceBelow(container) <= FOLLOW_SLACK)
+  if (follow) pendingNew = false
+  lastScrollH = container.scrollHeight
+  syncBottomButton()
 }, { passive: true })
-$('#toBottom').addEventListener('click', () => $('#messages').scrollTo({ top: $('#messages').scrollHeight, behavior: 'smooth' }))
+$('#toBottom').addEventListener('click', () => {
+  follow = true; pendingNew = false
+  scrollToEnd()
+  lastScrollH = $('#messages').scrollHeight
+  syncBottomButton()
+})
+$('#messages').addEventListener('click', (event) => {
+  const head = event.target.closest('[data-tool-toggle]')
+  if (head) toggleTool(head.closest('.message'))
+})
+$('#messages').addEventListener('keydown', (event) => {
+  const head = event.target.closest('[data-tool-toggle]')
+  if (head && event.target === head && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); toggleTool(head.closest('.message')) }
+})
+$('#queueTray').addEventListener('click', (event) => {
+  const remove = event.target.closest('[data-queue-remove]')
+  if (remove) { const list = queues.get(activeSession) || []; list.splice(Number(remove.dataset.queueRemove), 1); renderQueue(); return }
+  if (event.target.closest('[data-queue-resume]')) { pausedSessions.delete(activeSession); renderQueue(); maybeFlushQueue() }
+})
+$('#pinSession').addEventListener('click', () => {
+  if (!sheetSession) return
+  const flag = !pinnedIds().has(sheetSession.id)
+  setPinned(sheetSession.id, flag)
+  $('#sessionSheet').hidden = true
+  renderSessions()
+  notify(flag ? 'Pinned to top' : 'Unpinned')
+})
+$('#chatUsage').addEventListener('click', () => { if ($('#chatUsage').__detail) notify($('#chatUsage').__detail) })
+$('#searchToggle').addEventListener('click', () => (searchOpen() ? closeChatSearch() : openChatSearch()))
+$('#chatSearchClose').addEventListener('click', closeChatSearch)
+$('#chatSearchPrev').addEventListener('click', () => stepSearch(-1))
+$('#chatSearchNext').addEventListener('click', () => stepSearch(1))
+$('#chatSearchInput').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => runChatSearch(), 180) })
+$('#chatSearchInput').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') { event.preventDefault(); stepSearch(event.shiftKey ? -1 : 1) }
+  else if (event.key === 'Escape') closeChatSearch()
+})
 window.addEventListener('resize', updateViewportInsets)
 window.visualViewport?.addEventListener('resize', updateViewportInsets)
 window.visualViewport?.addEventListener('scroll', updateViewportInsets)
 document.addEventListener('visibilitychange', syncChatBackground)
+
+/* ── Plan / todo panel ──────────────────────────────────────────────────── */
+const TODO_STATES = ['pending', 'in_progress', 'completed', 'cancelled']
+
+function todosFromMessages(messages) {
+  for (let m = messages.length - 1; m >= 0; m--) {
+    const parts = messages[m].parts || []
+    for (let p = parts.length - 1; p >= 0; p--) {
+      const part = parts[p]
+      if (part.type !== 'tool' || String(part.tool || '').toLowerCase() !== 'todowrite') continue
+      const list = part.state?.input?.todos || part.state?.metadata?.todos
+      if (Array.isArray(list)) return list
+    }
+  }
+  return []
+}
+
+function setTodos(list) {
+  const todos = (Array.isArray(list) ? list : []).filter((item) => item && typeof item.content === 'string' && item.content.trim())
+    .map((item) => ({ content: item.content.trim(), status: TODO_STATES.includes(item.status) ? item.status : 'pending' }))
+  const signature = JSON.stringify(todos)
+  if (signature === todoSig) return
+  todoSig = signature
+  const panel = $('#todoPanel')
+  if (!todos.length) { panel.hidden = true; $('#todoList').innerHTML = ''; return }
+  const total = todos.filter((item) => item.status !== 'cancelled').length || todos.length
+  const done = todos.filter((item) => item.status === 'completed').length
+  const active = todos.find((item) => item.status === 'in_progress')
+  const complete = done >= total
+  panel.hidden = false
+  panel.classList.toggle('complete', complete)
+  $('#todoTitle').textContent = active ? active.content : complete ? 'Plan complete' : 'Plan'
+  $('#todoCount').textContent = `${done}/${total}`
+  $('#todoFill').style.width = `${Math.round((done / total) * 100)}%`
+  $('#todoList').innerHTML = todos.map((item) => `<li data-status="${item.status}">${escapeHTML(item.content)}</li>`).join('')
+  applyTodoOpen()
+}
+
+function applyTodoOpen() {
+  const open = localStorage.getItem(TODO_OPEN_KEY) === '1'
+  $('#todoList').hidden = !open
+  $('#todoToggle').setAttribute('aria-expanded', String(open))
+  $('#todoPanel').classList.toggle('open', open)
+}
+
+$('#todoToggle').addEventListener('click', () => {
+  try { localStorage.setItem(TODO_OPEN_KEY, localStorage.getItem(TODO_OPEN_KEY) === '1' ? '0' : '1') } catch (_) {}
+  applyTodoOpen()
+  tap()
+  requestAnimationFrame(() => { if (follow) scrollToEnd(); else syncBottomButton() })
+})
+
+/* ── Native entry points: shortcuts, widget, notifications ──────────────── */
+window.nativeOpenSession = async (profileId, sessionId, title) => {
+  if (!$('#intro').hidden) closeIntro()
+  if (!profiles.some((profile) => profile.id === profileId)) { notify('That connection no longer exists'); return }
+  if (currentScreen === '#chatScreen' && activeSession === sessionId && activeProfile?.id === profileId) return
+  if (activeSession) { leaveChat(); show('#sessionsScreen') }
+  if (!activeProfile || activeProfile.id !== profileId || !activeToken) await connectProfile(profileId)
+  if (!activeProfile || activeProfile.id !== profileId || !activeToken) return
+  await openSession(sessionId, title || 'Session')
+}
+
+window.nativeNewChat = async () => {
+  if (!$('#intro').hidden) closeIntro()
+  if (!profiles.length) { notify('Add a connection first'); show('#connectionsScreen'); return }
+  let id = null
+  try { id = localStorage.getItem(LAST_PROFILE_KEY) } catch (_) {}
+  if (!profiles.some((profile) => profile.id === id)) id = profiles.length === 1 ? profiles[0].id : null
+  if (!id) { notify('Choose a server to start a new chat'); show('#connectionsScreen'); return }
+  if (activeSession) { leaveChat(); show('#sessionsScreen') }
+  if (!activeProfile || activeProfile.id !== id || !activeToken) await connectProfile(id)
+  if (!activeProfile || activeProfile.id !== id || !activeToken) return
+  await createSession()
+}
+
+// Called by the native watcher when a watched session changes while the app is on screen.
+window.nativeTaskEvent = (kind, sessionId, title) => {
+  if (currentScreen === '#chatScreen' && sessionId === activeSession) return
+  const name = title || 'A session'
+  if (kind === 'permission') { notify(`${name} needs your approval`); haptic('attention') }
+  else { notify(kind === 'failed' ? `${name} stopped with an error` : `${name} finished`); haptic(kind === 'failed' ? 'error' : 'done') }
+  if (currentScreen === '#sessionsScreen') loadSessions()
+}
+
+window.notifyPermissionResult = (granted) => {
+  if (!granted) {
+    try { localStorage.setItem(NOTIFY_KEY, 'off') } catch (_) {}
+    syncPhoneCard()
+    notify('Notifications are blocked. Allow them in Android settings to get alerts.')
+  }
+}
+
+/* ── “On this phone” settings ───────────────────────────────────────────── */
+function syncPhoneCard() {
+  $('#notifyToggle').checked = prefOn(NOTIFY_KEY)
+  $('#hapticToggle').checked = prefOn(HAPTIC_KEY)
+  const volume = String(Math.round(soundVolume() * 100))
+  $('#soundVolume').value = volume
+  $('#soundVolume').style.setProperty('--range', `${volume}%`)
+  $('#soundVolumeValue').textContent = `${volume}%`
+  $('#autoScroll').value = autoScrollMode()
+  $('#fontSize').value = prefValue(FONT_SIZE_KEY, '100')
+}
+function applyFontSize(value = prefValue(FONT_SIZE_KEY, '100')) {
+  const percent = ['100', '115', '130'].includes(String(value)) ? Number(value) : 100
+  document.body.dataset.fontSize = String(percent)
+  try { nativeDevice?.setTextZoom?.(percent) } catch (_) {}
+}
+syncPhoneCard()
+applyFontSize()
+if (nativeDevice && typeof nativeDevice.haptic === 'function') {
+  $('#notifyToggle').addEventListener('change', (event) => {
+    const on = event.target.checked
+    try { localStorage.setItem(NOTIFY_KEY, on ? 'on' : 'off') } catch (_) {}
+    if (on) { try { nativeDevice.requestNotifications() } catch (_) {} }
+    else if (activeSession) unwatchSession(activeSession)
+  })
+  $('#hapticToggle').addEventListener('change', (event) => {
+    try { localStorage.setItem(HAPTIC_KEY, event.target.checked ? 'on' : 'off') } catch (_) {}
+    if (event.target.checked) { try { nativeDevice.haptic('done') } catch (_) {} }
+  })
+} else {
+  $('#notifyToggle').disabled = true
+  $('#hapticToggle').disabled = true
+}
+
+$('#soundVolume').addEventListener('input', (event) => {
+  const value = String(event.target.value)
+  event.target.style.setProperty('--range', `${value}%`)
+  $('#soundVolumeValue').textContent = `${value}%`
+  try { localStorage.setItem(SOUND_VOLUME_KEY, value) } catch (_) {}
+})
+$('#soundVolume').addEventListener('change', () => playSound('#soundButton', 1))
+$('#autoScroll').addEventListener('change', (event) => {
+  try { localStorage.setItem(AUTO_SCROLL_KEY, event.target.value) } catch (_) {}
+  follow = event.target.value === 'always' || (event.target.value === 'smart' && distanceBelow() <= FOLLOW_SLACK)
+  if (follow) { pendingNew = false; scrollToEnd() }
+  syncBottomButton()
+})
+$('#fontSize').addEventListener('change', (event) => {
+  try { localStorage.setItem(FONT_SIZE_KEY, event.target.value) } catch (_) {}
+  applyFontSize(event.target.value)
+  requestAnimationFrame(updateViewportInsets)
+})
 
 migrateLegacyTokens()
 renderProfiles()
@@ -1405,6 +1902,7 @@ document.addEventListener('click', (event) => {
   const button = event.target.closest('[data-msg-action]')
   if (!button) return
   const message = button.closest('.message')
+  if (button.dataset.msgAction === 'retry') { retryLast(); return }
   const text = message?.__fullText || message?.__text || message?.querySelector('.bubble')?.innerText || ''
   if (!text) return
   tap()
@@ -1418,3 +1916,197 @@ document.addEventListener('click', (event) => {
     })
   } else editFromMessage(message)
 })
+
+
+/* ── Follow the answer only while you are at the bottom ─────────────────── */
+function contentEnd(container) {
+  for (let index = container.children.length - 1; index >= 0; index--) {
+    const el = container.children[index]
+    if (!el.hidden && el.offsetParent !== null) return el.offsetTop + el.offsetHeight
+  }
+  return 0
+}
+
+// How far the end of the conversation is below the visible area (the big
+// "pin the question" padding is deliberately ignored).
+function distanceBelow(container = $('#messages')) { return contentEnd(container) + 22 - (container.scrollTop + container.clientHeight) }
+
+function syncBottomButton() {
+  const button = $('#toBottom')
+  const distance = distanceBelow()
+  const fresh = pendingNew && distance > FOLLOW_SLACK
+  button.classList.toggle('has-new', fresh)
+  button.classList.toggle('show', fresh || distance > 260)
+}
+
+function scrollToEnd() {
+  const container = $('#messages')
+  const target = Math.max(0, contentEnd(container) + 22 - container.clientHeight)
+  if (target > container.scrollTop) container.scrollTop = target
+}
+
+let followFrame = 0
+function afterGrowth() {
+  const container = $('#messages')
+  if (!container || currentScreen !== '#chatScreen') return
+  const grew = container.scrollHeight > lastScrollH + 1
+  lastScrollH = container.scrollHeight
+  const mode = autoScrollMode()
+  if (mode === 'always') follow = true
+  if (mode !== 'off' && follow) {
+    if (Date.now() < pinUntil || followFrame) return
+    followFrame = requestAnimationFrame(() => { followFrame = 0; scrollToEnd(); lastScrollH = container.scrollHeight; syncBottomButton() })
+    return
+  }
+  if (grew && distanceBelow(container) > FOLLOW_SLACK) pendingNew = true
+  syncBottomButton()
+}
+
+/* ── Tool details ───────────────────────────────────────────────────────── */
+function toggleTool(node, force) {
+  if (!node || !node.__part) return
+  const open = force === undefined ? !node.__open : force
+  if (open === !!node.__open) return
+  node.__open = open
+  node.innerHTML = toolChipHtml(node.__part, open, true)
+  if (open) follow = false
+  lastScrollH = $('#messages').scrollHeight
+  syncBottomButton()
+}
+
+/* ── Token and cost display ─────────────────────────────────────────────── */
+function renderUsage(messages) {
+  const el = $('#chatUsage')
+  const sum = { input: 0, output: 0, reasoning: 0, read: 0, write: 0, cost: 0 }
+  messages.forEach((entry) => {
+    const info = entry.info
+    if (info?.role !== 'assistant') return
+    const tokens = info.tokens || {}
+    sum.input += Number(tokens.input) || 0
+    sum.output += Number(tokens.output) || 0
+    sum.reasoning += Number(tokens.reasoning) || 0
+    sum.read += Number(tokens.cache?.read) || 0
+    sum.write += Number(tokens.cache?.write) || 0
+    sum.cost += Number(info.cost) || 0
+  })
+  const total = sum.input + sum.output + sum.reasoning
+  if (!total && !sum.cost) { el.hidden = true; el.textContent = ''; el.__detail = ''; return }
+  el.hidden = false
+  el.textContent = ` · ${fmtTokens(total)} tok${sum.cost > 0 ? ` · ${fmtCost(sum.cost)}` : ''}`
+  el.__detail = `Input ${fmtTokens(sum.input)} · Output ${fmtTokens(sum.output)}${sum.reasoning ? ` · Reasoning ${fmtTokens(sum.reasoning)}` : ''} · Cache ${fmtTokens(sum.read)} read / ${fmtTokens(sum.write)} write · ${sum.cost > 0 ? `Cost ${fmtCost(sum.cost)}` : 'Cost not reported'}`
+}
+
+/* ── Search inside the conversation ─────────────────────────────────────── */
+const CAN_HIGHLIGHT = typeof CSS !== 'undefined' && 'highlights' in CSS && typeof Highlight !== 'undefined'
+let searchMatches = []
+let searchIndex = -1
+let searchTimer = null
+
+function searchOpen() { return !$('#chatSearch').hidden }
+
+function openChatSearch() {
+  $('#chatSearch').hidden = false
+  $('#searchToggle').classList.add('on')
+  const input = $('#chatSearchInput')
+  input.focus(); input.select()
+  if (input.value.trim()) runChatSearch()
+}
+
+function clearSearchHighlights() {
+  if (CAN_HIGHLIGHT) { CSS.highlights.delete('chat-find'); CSS.highlights.delete('chat-find-current') }
+  document.querySelectorAll('#messages .search-hit, #messages .search-current').forEach((node) => node.classList.remove('search-hit', 'search-current'))
+}
+
+function closeChatSearch() {
+  const bar = $('#chatSearch')
+  if (bar.hidden) return
+  bar.hidden = true
+  $('#searchToggle').classList.remove('on')
+  clearTimeout(searchTimer)
+  clearSearchHighlights()
+  searchMatches = []; searchIndex = -1
+  updateSearchCount()
+  $('#chatSearchInput').blur()
+}
+
+function collectTextRanges(root, query) {
+  const ranges = []
+  if (!root) return ranges
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) => (node.parentElement && !node.parentElement.closest('.msg-actions, .msg-meta, .code-head, .diff-head') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
+  })
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const text = node.nodeValue.toLowerCase()
+    for (let from = 0; ranges.length < 500;) {
+      const at = text.indexOf(query, from)
+      if (at < 0) break
+      const range = document.createRange()
+      range.setStart(node, at); range.setEnd(node, at + query.length)
+      ranges.push(range)
+      from = at + query.length
+    }
+  }
+  return ranges
+}
+
+function updateSearchCount() {
+  const query = $('#chatSearchInput').value.trim()
+  $('#chatSearchCount').textContent = !query ? '' : searchMatches.length ? `${searchIndex + 1}/${searchMatches.length}` : '0'
+  const none = !searchMatches.length
+  $('#chatSearchPrev').disabled = none
+  $('#chatSearchNext').disabled = none
+}
+
+function runChatSearch({ keep = false, scroll = true } = {}) {
+  const query = $('#chatSearchInput').value.trim().toLowerCase()
+  const previousIndex = searchIndex
+  clearSearchHighlights()
+  searchMatches = []
+  if (query.length >= 2) {
+    $('#messages').querySelectorAll(':scope > .message[data-key], :scope > .message.optimistic').forEach((node) => {
+      if (node.classList.contains('tool-message')) {
+        if (node.__part && toolSearchText(node.__part).includes(query)) searchMatches.push({ node, tool: true })
+        return
+      }
+      collectTextRanges(node, query).forEach((range) => searchMatches.push({ node, range }))
+    })
+  }
+  searchIndex = !searchMatches.length ? -1 : keep && previousIndex >= 0 ? Math.min(previousIndex, searchMatches.length - 1) : searchMatches.length - 1
+  showCurrentMatch(scroll)
+}
+
+function showCurrentMatch(scroll) {
+  const query = $('#chatSearchInput').value.trim().toLowerCase()
+  const match = searchMatches[searchIndex]
+  document.querySelectorAll('#messages .search-current').forEach((node) => node.classList.remove('search-current'))
+  searchMatches.forEach((entry) => entry.node.classList.add('search-hit'))
+  if (match && match.tool && !match.node.__open) toggleTool(match.node, true)
+  if (match && match.tool) match.range = collectTextRanges(match.node.querySelector('.tool-body'), query)[0] || null
+  if (CAN_HIGHLIGHT) {
+    const all = searchMatches.filter((entry) => entry.range && !entry.tool).map((entry) => entry.range)
+    searchMatches.filter((entry) => entry.tool && entry.node.__open).forEach((entry) => all.push(...collectTextRanges(entry.node.querySelector('.tool-body'), query)))
+    if (all.length) CSS.highlights.set('chat-find', new Highlight(...all)); else CSS.highlights.delete('chat-find')
+    if (match && match.range) CSS.highlights.set('chat-find-current', new Highlight(match.range)); else CSS.highlights.delete('chat-find-current')
+  }
+  updateSearchCount()
+  if (!match) return
+  match.node.classList.add('search-current')
+  if (!scroll) return
+  const container = $('#messages')
+  const rect = (match.range || match.node).getBoundingClientRect()
+  const box = container.getBoundingClientRect()
+  container.scrollTo({ top: Math.max(0, container.scrollTop + rect.top - box.top - container.clientHeight * 0.3), behavior: 'smooth' })
+}
+
+function stepSearch(direction) {
+  if (!searchMatches.length) return
+  searchIndex = (searchIndex + direction + searchMatches.length) % searchMatches.length
+  showCurrentMatch(true)
+}
+
+// Messages re-render while OpenCode streams; keep the highlights in sync without moving the view.
+function refreshChatSearch() {
+  if (!searchOpen() || !$('#chatSearchInput').value.trim()) return
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => runChatSearch({ keep: true, scroll: false }), 300)
+}

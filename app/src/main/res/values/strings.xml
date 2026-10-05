@@ -1,0 +1,29 @@
+<resources>
+    <string name="app_name">OpenCode Unofficial</string>
+    <string name="shortcut_new_chat_short">New chat</string>
+    <string name="shortcut_new_chat_long">Start a new chat</string>
+    <string name="shortcut_resume_long">Resume: %1$s</string>
+    <string name="last_session_fallback">Last session</string>
+    <string name="channel_running">Running tasks</string>
+    <string name="channel_running_desc">Shown while OpenCode works on a task in the background.</string>
+    <string name="channel_done">Task finished</string>
+    <string name="channel_done_desc">OpenCode finished a task or stopped with an error.</string>
+    <string name="channel_attention">Needs your approval</string>
+    <string name="channel_attention_desc">OpenCode is waiting for a permission decision.</string>
+    <string name="notif_running">OpenCode is working</string>
+    <string name="notif_done">OpenCode finished</string>
+    <string name="notif_failed">OpenCode stopped with an error</string>
+    <string name="notif_permission">OpenCode needs permission</string>
+    <plurals name="notif_running_count">
+        <item quantity="one">%d task running</item>
+        <item quantity="other">%d tasks running</item>
+    </plurals>
+    <string name="widget_label">Last session</string>
+    <string name="widget_description">Jump back into your last OpenCode session or start a new chat.</string>
+    <string name="widget_empty">No session yet</string>
+    <string name="widget_empty_hint">Open the app to begin</string>
+    <string name="widget_working">Working…</string>
+    <string name="widget_done">Finished · tap to open</string>
+    <string name="widget_continue">Tap to continue</string>
+    <string name="widget_new_chat">+ New</string>
+</resources>

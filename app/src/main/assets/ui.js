@@ -188,10 +188,31 @@ function inlineMarkdown(raw) {
   return text.replace(/\u0001(\d+)\u0001/g, (_, index) => stash[Number(index)])
 }
 
-function codeBlockHtml(code, lang, closed) {
-  const label = (lang || 'text').toLowerCase()
-  const body = label === 'diff' || label === 'patch' ? highlightDiff(code) : highlightCode(code, label)
-  return `<div class="code-block${closed ? '' : ' streaming'}"><div class="code-head"><span class="code-lang">${esc(label)}</span><button class="code-copy" type="button" data-copy>${icon('copy')}<span>Copy</span></button></div><pre><code>${body}</code></pre></div>`
+const LANG_LABELS = { js: 'javascript', mjs: 'javascript', cjs: 'javascript', ts: 'typescript', py: 'python', sh: 'shell', bash: 'shell', zsh: 'shell', console: 'shell', yml: 'yaml', md: 'markdown', rs: 'rust', kt: 'kotlin', rb: 'ruby', cs: 'c#', cpp: 'c++', cc: 'c++', hpp: 'c++', ps1: 'powershell' }
+const WRAP_KEY = 'opencode.remote.wrap.v1'
+
+function prettyLang(lang) {
+  const key = String(lang || '').toLowerCase()
+  return LANG_LABELS[key] || key || 'text'
+}
+
+function wrapEnabled() { try { return localStorage.getItem(WRAP_KEY) === '1' } catch (_) { return false } }
+function applyWrap() {
+  const on = wrapEnabled()
+  document.documentElement.classList.toggle('wrap-code', on)
+  document.querySelectorAll('[data-wrap]').forEach((button) => button.setAttribute('aria-pressed', on ? 'true' : 'false'))
+}
+function toggleWrap() {
+  try { localStorage.setItem(WRAP_KEY, wrapEnabled() ? '0' : '1') } catch (_) {}
+  applyWrap()
+}
+
+function codeBlockHtml(code, lang, closed, opts = {}) {
+  const key = String(lang || '').toLowerCase()
+  const label = opts.label || prettyLang(lang)
+  const body = key === 'diff' || key === 'patch' ? highlightDiff(code) : highlightCode(code, key)
+  const wrap = `<button class="code-wrap" type="button" data-wrap aria-label="Wrap long lines" aria-pressed="${wrapEnabled()}">${icon('wrap')}</button>`
+  return `<div class="code-block${closed ? '' : ' streaming'}"><div class="code-head"><span class="code-lang">${esc(label)}</span><span class="code-tools">${wrap}<button class="code-copy" type="button" data-copy>${icon('copy')}<span>Copy</span></button></span></div><pre><code>${body}</code></pre></div>`
 }
 
 function listHtml(items) {
@@ -302,7 +323,7 @@ function renderMarkdown(source, options = {}) {
 }
 
 /* ── Tool-call chips ────────────────────────────────────────────────────── */
-const TOOL_ICONS = { bash: 'terminal', shell: 'terminal', read: 'file', write: 'edit', edit: 'edit', patch: 'edit', multiedit: 'edit', grep: 'search', glob: 'search', list: 'folder', ls: 'folder', webfetch: 'globe', websearch: 'globe', todowrite: 'list', todoread: 'list', task: 'sparkle' }
+const TOOL_ICONS = { bash: 'terminal', shell: 'terminal', read: 'file', write: 'edit', edit: 'edit', patch: 'edit', multiedit: 'edit', grep: 'search', glob: 'search', list: 'folder', ls: 'folder', webfetch: 'globe', websearch: 'globe', todowrite: 'list', todoread: 'list', task: 'sparkle', apply_patch: 'edit' }
 
 function toolSummary(part) {
   const state = part.state || {}
@@ -311,11 +332,202 @@ function toolSummary(part) {
   return String(pick).split('\n')[0].slice(0, 140)
 }
 
-function toolChipHtml(part) {
+const ANSI_RE = /\u001b\[[0-9;?]*[ -\/]*[@-~]/g
+
+function clip(text, max) {
+  const clean = String(text ?? '').replace(ANSI_RE, '')
+  return clean.length > max ? { text: clean.slice(0, max), more: clean.length - max } : { text: clean, more: 0 }
+}
+
+function extLang(path) {
+  const match = String(path || '').match(/\.([A-Za-z0-9+#]+)$/)
+  return match ? match[1].toLowerCase() : ''
+}
+
+function textBlock(label, text, lang = '', max = 12000) {
+  const part = clip(text, max)
+  if (!part.text.trim()) return ''
+  const more = part.more ? `<small class="tool-more">… ${part.more.toLocaleString()} more characters not shown</small>` : ''
+  return `<div class="tool-section">${codeBlockHtml(part.text, lang, true, { label })}${more}</div>`
+}
+
+/* ── Diffs ──────────────────────────────────────────────────────────────── */
+function unifiedRows(text) {
+  const rows = []
+  let oldNo = 0
+  let newNo = 0
+  let inHunk = false
+  for (const line of String(text || '').replace(/\r\n?/g, '\n').split('\n')) {
+    let m
+    if ((m = line.match(/^\*\*\* (?:Update|Add|Delete) File:\s*(.+)$/))) { rows.push({ t: 'file', text: m[1] }); inHunk = true; continue }
+    if (/^\*\*\* (?:Begin|End) Patch/.test(line)) continue
+    if ((m = line.match(/^diff --git a\/(.+?) b\/(.+)$/))) { rows.push({ t: 'file', text: m[2] }); inHunk = false; continue }
+    if (/^Index: /.test(line)) { rows.push({ t: 'file', text: line.slice(7).trim() }); inHunk = false; continue }
+    if ((m = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)/))) { oldNo = Number(m[1]); newNo = Number(m[2]); inHunk = true; rows.push({ t: 'hunk', text: line }); continue }
+    if (line.startsWith('@@')) { inHunk = true; oldNo = 0; newNo = 0; rows.push({ t: 'hunk', text: line }); continue }
+    if (!inHunk) continue
+    if (line.startsWith('\\')) continue
+    const numbered = oldNo > 0 || newNo > 0
+    if (line.startsWith('+')) { rows.push({ t: 'add', text: line.slice(1), no: numbered ? newNo : undefined }); if (numbered) newNo += 1 }
+    else if (line.startsWith('-')) { rows.push({ t: 'del', text: line.slice(1), no: numbered ? oldNo : undefined }); if (numbered) oldNo += 1 }
+    else if (line.startsWith(' ')) { rows.push({ t: 'ctx', text: line.slice(1), no: numbered ? newNo : undefined }); if (numbered) { oldNo += 1; newNo += 1 } }
+  }
+  while (rows.length && rows[rows.length - 1].t === 'ctx' && rows[rows.length - 1].text === '') rows.pop()
+  return rows
+}
+
+function lineDiffRows(before, after) {
+  const a = String(before ?? '').replace(/\r\n?/g, '\n').split('\n')
+  const b = String(after ?? '').replace(/\r\n?/g, '\n').split('\n')
+  let head = 0
+  while (head < a.length && head < b.length && a[head] === b[head]) head += 1
+  let tail = 0
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail += 1
+  const midA = a.slice(head, a.length - tail)
+  const midB = b.slice(head, b.length - tail)
+  const rows = a.slice(0, head).map((text) => ({ t: 'ctx', text }))
+  if (midA.length * midB.length > 160000) {
+    midA.forEach((text) => rows.push({ t: 'del', text }))
+    midB.forEach((text) => rows.push({ t: 'add', text }))
+  } else {
+    const width = midB.length + 1
+    const table = new Uint16Array((midA.length + 1) * width)
+    for (let i = midA.length - 1; i >= 0; i--) {
+      for (let j = midB.length - 1; j >= 0; j--) {
+        table[i * width + j] = midA[i] === midB[j] ? table[(i + 1) * width + j + 1] + 1 : Math.max(table[(i + 1) * width + j], table[i * width + j + 1])
+      }
+    }
+    let i = 0
+    let j = 0
+    while (i < midA.length || j < midB.length) {
+      if (i < midA.length && j < midB.length && midA[i] === midB[j]) { rows.push({ t: 'ctx', text: midA[i] }); i += 1; j += 1 }
+      else if (j < midB.length && (i === midA.length || table[i * width + j + 1] >= table[(i + 1) * width + j])) { rows.push({ t: 'add', text: midB[j] }); j += 1 }
+      else { rows.push({ t: 'del', text: midA[i] }); i += 1 }
+    }
+  }
+  a.slice(a.length - tail).forEach((text) => rows.push({ t: 'ctx', text }))
+  return rows
+}
+
+function collapseRows(rows, keep = 3) {
+  const show = new Array(rows.length).fill(false)
+  rows.forEach((row, index) => {
+    if (row.t === 'ctx') return
+    for (let k = Math.max(0, index - keep); k <= Math.min(rows.length - 1, index + keep); k++) show[k] = true
+  })
+  const out = []
+  let hidden = 0
+  rows.forEach((row, index) => {
+    if (show[index] || row.t !== 'ctx') {
+      if (hidden) { out.push({ t: 'gap', text: `⋯ ${hidden} unchanged line${hidden === 1 ? '' : 's'}` }); hidden = 0 }
+      out.push(row)
+    } else hidden += 1
+  })
+  if (hidden && out.length) out.push({ t: 'gap', text: `⋯ ${hidden} unchanged line${hidden === 1 ? '' : 's'}` })
+  return out
+}
+
+function diffViewHtml(path, rows) {
+  const add = rows.filter((row) => row.t === 'add').length
+  const del = rows.filter((row) => row.t === 'del').length
+  const MAX_ROWS = 600
+  const shown = rows.slice(0, MAX_ROWS)
+  const body = shown.map((row) => {
+    if (row.t === 'hunk') return `<div class="dr hunk"><code>${esc(row.text)}</code></div>`
+    if (row.t === 'gap') return `<div class="dr gap"><code>${esc(row.text)}</code></div>`
+    if (row.t === 'file') return `<div class="dr file"><code>${esc(row.text)}</code></div>`
+    const mark = row.t === 'add' ? '+' : row.t === 'del' ? '−' : ' '
+    return `<div class="dr ${row.t}"><i class="dn">${row.no ?? ''}</i><i class="dm">${mark}</i><code>${esc(row.text) || ' '}</code></div>`
+  }).join('')
+  const more = rows.length > MAX_ROWS ? `<div class="dr gap"><code>⋯ ${rows.length - MAX_ROWS} more lines not shown</code></div>` : ''
+  return `<div class="diff-view"><div class="diff-head">${icon('file')}<span class="diff-path">${esc(path || 'Changes')}</span><span class="diff-stat"><b class="a">+${add}</b><b class="d">−${del}</b></span><button class="code-copy" type="button" data-copy-diff>${icon('copy')}<span>Copy</span></button></div><div class="diff-scroll"><div class="diff-lines">${body}${more}</div></div></div>`
+}
+
+function toolDiffs(part) {
+  const state = part.state || {}
+  const input = state.input || {}
+  const meta = state.metadata || {}
+  const tool = String(part.tool || '').toLowerCase()
+  const path = input.filePath || input.path || ''
+  const out = []
+  if (Array.isArray(meta.files)) meta.files.forEach((file) => { if (file && typeof file.diff === 'string' && file.diff.trim()) out.push({ path: file.relativePath || file.filePath || file.path || '', rows: unifiedRows(file.diff) }) })
+  if (!out.length && typeof meta.diff === 'string' && meta.diff.trim()) out.push({ path, rows: unifiedRows(meta.diff) })
+  if (!out.length && meta.filediff && typeof meta.filediff === 'object' && meta.filediff.before !== undefined && meta.filediff.after !== undefined) out.push({ path: meta.filediff.file || path, rows: collapseRows(lineDiffRows(meta.filediff.before, meta.filediff.after)) })
+  if (!out.length) {
+    if (typeof input.oldString === 'string' && typeof input.newString === 'string') out.push({ path, rows: collapseRows(lineDiffRows(input.oldString, input.newString)) })
+    else if (Array.isArray(input.edits)) input.edits.forEach((edit) => { if (edit && typeof edit.oldString === 'string') out.push({ path: edit.filePath || path, rows: collapseRows(lineDiffRows(edit.oldString, edit.newString ?? '')) }) })
+    else if (tool === 'write' && typeof input.content === 'string') out.push({ path, rows: input.content.split('\n').map((text) => ({ t: 'add', text })) })
+    else if (typeof input.patchText === 'string' && input.patchText.trim()) out.push({ path: '', rows: unifiedRows(input.patchText) })
+  }
+  return out.filter((diff) => diff.rows.length)
+}
+
+function toolDetailsHtml(part) {
+  const state = part.state || {}
+  const input = state.input || {}
+  const meta = state.metadata || {}
+  const tool = String(part.tool || '').toLowerCase()
+  const path = input.filePath || input.path || ''
+  const diffs = toolDiffs(part)
+  let html = ''
+  if (tool === 'bash' || tool === 'shell') {
+    if (input.description) html += `<p class="tool-desc">${esc(input.description)}</p>`
+    html += textBlock('command', input.command, 'sh', 6000)
+    html += textBlock('output', state.output ?? meta.output, '', 12000)
+  } else if (diffs.length) {
+    html += diffs.map((diff) => diffViewHtml(diff.path, diff.rows)).join('')
+  } else if (tool === 'todowrite' && Array.isArray(input.todos)) {
+    html += `<ul class="tool-todos">${input.todos.map((todo) => `<li class="${esc(todo.status || '')}"><span class="task${todo.status === 'completed' ? ' on' : ''}"></span>${esc(todo.content || '')}</li>`).join('')}</ul>`
+  } else {
+    const facts = Object.entries(input).filter(([, value]) => typeof value === 'string' && value.length < 300 && !value.includes('\n')).map(([key, value]) => `<div class="tool-fact"><span>${esc(key)}</span><code>${esc(value)}</code></div>`).join('')
+    if (facts) html += `<div class="tool-section"><div class="tool-label">input</div><div class="tool-facts">${facts}</div></div>`
+    const longInputs = Object.entries(input).filter(([, value]) => typeof value === 'string' && (value.length >= 300 || value.includes('\n')))
+    longInputs.forEach(([key, value]) => { html += textBlock(key, value, extLang(path), 6000) })
+    if (!facts && !longInputs.length && Object.keys(input).length) html += textBlock('input', JSON.stringify(input, null, 2), 'json', 4000)
+    html += textBlock('output', state.output, tool === 'read' ? extLang(path) : '', 12000)
+  }
+  if (state.error) html += `<div class="tool-section tool-error">${codeBlockHtml(clip(state.error, 4000).text, '', true, { label: 'error' })}</div>`
+  const time = state.time || {}
+  const facts = []
+  if (typeof time.start === 'number' && typeof time.end === 'number' && time.end - time.start >= 100) facts.push(`${((time.end - time.start) / 1000).toFixed(1)}s`)
+  if (typeof meta.exit === 'number') facts.push(`exit ${meta.exit}`)
+  if (path && !diffs.length) facts.push(path)
+  if (facts.length && html) html += `<div class="tool-foot">${facts.map((fact) => `<span>${esc(fact)}</span>`).join('')}</div>`
+  return html || '<p class="tool-empty">No details reported yet.</p>'
+}
+
+function toolSig(part) {
+  const state = part.state || {}
+  const meta = state.metadata || {}
+  return `${state.status}|${toolSummary(part)}|${String(state.output ?? meta.output ?? '').length}|${state.error ? 1 : 0}|${String(meta.diff || '').length}`
+}
+
+function toolSearchText(part) {
+  const state = part.state || {}
+  const input = state.input || {}
+  const strings = Object.values(input).filter((value) => typeof value === 'string')
+  return [part.tool, state.title, ...strings, state.output, state.error].filter(Boolean).join('\n').replace(ANSI_RE, '').slice(0, 40000).toLowerCase()
+}
+
+function toolChipHtml(part, open = false, fresh = false) {
   const name = String(part.tool || 'task')
   const status = String(part.state?.status || 'running')
   const stateIcon = status === 'completed' ? icon('check') : status === 'error' ? icon('x') : '<span class="spinner"></span>'
-  return `<div class="tool-chip" data-status="${esc(status)}"><span class="tool-ico">${icon(TOOL_ICONS[name.toLowerCase()] || 'cpu')}</span><div><b>${esc(name)}</b>${toolSummary(part) ? `<small>${esc(toolSummary(part))}</small>` : ''}</div><span class="tool-state">${stateIcon}</span></div>`
+  const summary = toolSummary(part)
+  const head = `<div class="tool-head" role="button" tabindex="0" aria-expanded="${open}" aria-label="${esc(name)} details" data-tool-toggle><span class="tool-ico">${icon(TOOL_ICONS[name.toLowerCase()] || 'cpu')}</span><div><b>${esc(name)}</b>${summary ? `<small>${esc(summary)}</small>` : ''}</div><span class="tool-state">${stateIcon}</span><span class="tool-chev">${icon('chev-d')}</span></div>`
+  return `<div class="tool-chip${open ? ' open' : ''}" data-status="${esc(status)}">${head}${open ? `<div class="tool-body${fresh ? ' fresh' : ''}">${toolDetailsHtml(part)}</div>` : ''}</div>`
+}
+
+/* ── Usage formatting ───────────────────────────────────────────────────── */
+function fmtTokens(count) {
+  const n = Number(count) || 0
+  if (n < 1000) return String(Math.round(n))
+  if (n < 1e6) return `${(n / 1000).toFixed(n < 1e4 ? 1 : 0).replace(/\.0$/, '')}k`
+  return `${(n / 1e6).toFixed(2).replace(/0$/, '').replace(/\.0$/, '')}M`
+}
+function fmtCost(value) {
+  const n = Number(value) || 0
+  return `$${n.toFixed(n < 0.01 ? 4 : 2)}`
 }
 
 /* ── Behaviour wiring ───────────────────────────────────────────────────── */
@@ -351,6 +563,25 @@ function wireUi() {
   }, { passive: true })
 
   document.addEventListener('click', (event) => {
+    const wrap = event.target.closest('[data-wrap]')
+    if (wrap) { toggleWrap(); tap(); return }
+    const copyDiff = event.target.closest('[data-copy-diff]')
+    if (copyDiff) {
+      const view = copyDiff.closest('.diff-view')
+      const text = Array.from(view.querySelectorAll('.dr')).map((row) => {
+        const code = row.querySelector('code')?.textContent || ''
+        if (row.classList.contains('add')) return `+${code}`
+        if (row.classList.contains('del')) return `-${code}`
+        if (row.classList.contains('ctx')) return ` ${code}`
+        return code
+      }).join('\n')
+      copyText(text).then((ok) => {
+        copyDiff.classList.toggle('done', ok)
+        copyDiff.querySelector('span').textContent = ok ? 'Copied' : 'Press & hold to copy'
+        setTimeout(() => { copyDiff.classList.remove('done'); copyDiff.querySelector('span').textContent = 'Copy' }, 1700)
+      })
+      return
+    }
     const copy = event.target.closest('[data-copy]')
     if (copy) {
       const block = copy.closest('.code-block')
@@ -374,6 +605,7 @@ function wireUi() {
 
   document.querySelectorAll('.guide').forEach((sheet) => sheet.addEventListener('click', (event) => { if (event.target === sheet) sheet.hidden = true }))
   document.querySelectorAll('.seg').forEach(syncSeg)
+  applyWrap()
 
   const input = document.querySelector('#promptInput')
   if (input) input.addEventListener('input', updateComposer)
